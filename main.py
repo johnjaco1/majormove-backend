@@ -200,6 +200,37 @@ def seed_unl():
 seed_unl()
 
 # ----------------------------------------------------------------------------
+# JSON repair — the AI occasionally uses a literal " for emphasis inside a
+# text field despite explicit instructions not to (e.g. explore this
+# "seriously" before committing), which breaks JSON parsing. A legitimate
+# JSON quote always has at least one structural neighbor (: , [ { on one
+# side, or , } ] : on the other, ignoring whitespace). A quote with plain
+# text on BOTH sides is never legitimate JSON — it's a stray quote used
+# inside a sentence, and gets converted to a single quote instead.
+# ----------------------------------------------------------------------------
+_STRUCTURAL_BEFORE = (":", ",", "[", "{")
+_STRUCTURAL_AFTER = (",", "}", "]", ":")
+
+
+def repair_stray_quotes(text: str) -> str:
+    out = []
+    n = len(text)
+    for i, ch in enumerate(text):
+        if ch != '"':
+            out.append(ch)
+            continue
+        prev_non_ws = next((out[j] for j in range(len(out) - 1, -1, -1) if not out[j].isspace()), None)
+        k = i + 1
+        while k < n and text[k].isspace():
+            k += 1
+        next_non_ws = text[k] if k < n else None
+        legit_before = prev_non_ws is None or prev_non_ws in _STRUCTURAL_BEFORE
+        legit_after = next_non_ws is None or next_non_ws in _STRUCTURAL_AFTER
+        out.append('"' if (legit_before or legit_after) else "'")
+    return "".join(out)
+
+
+# ----------------------------------------------------------------------------
 # Catalog scraping — scrape-on-demand with cache
 # ----------------------------------------------------------------------------
 def is_unl(school: str) -> bool:
@@ -296,8 +327,16 @@ ANALYSIS_SCHEMA = """Respond ONLY with valid JSON, no markdown:
 }
 Include the current major as path 0 (is_current: true) plus exactly 3 alternative paths (is_current: false).
 Success likelihood should vary realistically (not all 80+). Be honest about salaries with real market data.
-CRITICAL: never use a double-quote character (") inside any string value — it breaks JSON parsing.
-If you want to quote or emphasize a phrase inside a text field, use single quotes ('like this') instead."""
+
+ABSOLUTE RULE — this breaks the entire response if violated, follow it with zero exceptions:
+The double-quote character (") may ONLY appear as JSON structure (wrapping keys and string values).
+It must NEVER appear inside the text of any string value, for ANY reason — not for emphasis, not to
+quote a phrase, not for scare quotes, not for anything.
+WRONG (breaks parsing): "honest_take": "This is a "great fit" if you like data."
+WRONG (breaks parsing): "why_fit": "Explore this "seriously" before committing."
+RIGHT: "honest_take": "This is a great fit if you like data."
+RIGHT: "why_fit": "Seriously consider exploring this before committing."
+Simply do not use quotation marks of any kind inside your sentences. Rephrase instead of quoting."""
 
 
 async def generate_analysis(answers: dict, catalog: dict, transcript_text: str,
@@ -369,20 +408,30 @@ Student:
     try:
         return json.loads(clean)
     except json.JSONDecodeError:
+        # First repair attempt: fix stray quotes used for emphasis inside text
+        repaired = repair_stray_quotes(clean)
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            pass
         # Fallback: the model occasionally adds a stray sentence before/after
         # the JSON despite instructions not to. Extract the outermost {...}
         # block and try again before giving up.
         start = clean.find("{")
         end = clean.rfind("}")
         if start != -1 and end != -1 and end > start:
+            extracted = clean[start:end + 1]
             try:
-                return json.loads(clean[start:end + 1])
-            except json.JSONDecodeError as e2:
-                pos = e2.pos
-                ctx_start = max(0, pos - 300)
-                ctx_end = min(len(clean), pos + 300)
-                raise HTTPException(502, f"Could not parse AI response. Error: {e2}. "
-                                          f"Context around char {pos}: ...{clean[ctx_start:ctx_end]}...")
+                return json.loads(extracted)
+            except json.JSONDecodeError:
+                try:
+                    return json.loads(repair_stray_quotes(extracted))
+                except json.JSONDecodeError as e2:
+                    pos = e2.pos
+                    ctx_start = max(0, pos - 300)
+                    ctx_end = min(len(extracted), pos + 300)
+                    raise HTTPException(502, f"Could not parse AI response. Error: {e2}. "
+                                              f"Context around char {pos}: ...{extracted[ctx_start:ctx_end]}...")
         raise HTTPException(502, f"Could not parse AI response — no JSON object found. "
                                   f"Raw response (first 800 chars): {clean[:800]}")
 
