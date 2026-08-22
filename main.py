@@ -397,50 +397,61 @@ Student:
     else:
         content = prompt
 
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": ANTHROPIC_API_KEY,
-                     "anthropic-version": "2023-06-01",
-                     "content-type": "application/json"},
-            json={"model": ANTHROPIC_MODEL, "max_tokens": 3500,
-                  "messages": [{"role": "user", "content": content}]},
-        )
-    data = resp.json()
-    if "content" not in data:
-        raise HTTPException(502, f"AI error: {data.get('error', {}).get('message', 'unknown')}")
-    text = "".join(b["text"] for b in data["content"] if b.get("type") == "text")
-    if not text.strip():
-        block_types = [b.get("type") for b in data["content"]]
-        raise HTTPException(502, f"AI returned no text content. Block types present: {block_types}. "
-                                  f"stop_reason: {data.get('stop_reason')}. "
-                                  f"Full content (first 500 chars): {str(data['content'])[:500]}")
-    clean = text.replace("```json", "").replace("```", "").strip()
-
-    # Isolate the outermost {...} block up front (handles any stray prose
-    # the model adds before/after despite instructions not to).
-    start = clean.find("{")
-    end = clean.rfind("}")
-    candidate = clean[start:end + 1] if (start != -1 and end != -1 and end > start) else clean
-
-    # Try increasingly aggressive repairs, in order, until one parses.
-    attempts = [
-        candidate,
-        repair_stray_quotes(candidate),
-        repair_missing_commas(candidate),
-        repair_missing_commas(repair_stray_quotes(candidate)),
-    ]
     last_error = None
-    for attempt in attempts:
-        try:
-            return json.loads(attempt)
-        except json.JSONDecodeError as e:
-            last_error = e
+    last_debug = None
+    for attempt_num in range(2):  # try once, then retry once more on any failure
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"x-api-key": ANTHROPIC_API_KEY,
+                         "anthropic-version": "2023-06-01",
+                         "content-type": "application/json"},
+                json={"model": ANTHROPIC_MODEL, "max_tokens": 3500,
+                      "messages": [{"role": "user", "content": content}]},
+            )
+        data = resp.json()
+        if "content" not in data:
+            last_error = f"AI error: {data.get('error', {}).get('message', 'unknown')}"
+            continue
+        text = "".join(b["text"] for b in data["content"] if b.get("type") == "text")
+        if not text.strip():
+            last_error = f"AI returned no text content. stop_reason: {data.get('stop_reason')}"
+            continue
+        clean = text.replace("```json", "").replace("```", "").strip()
 
-    # Every repair failed — show the FULL text (not a truncated window) so
-    # the real problem is visible directly instead of guessing from a snippet.
-    raise HTTPException(502, f"Could not parse AI response after all repair attempts. "
-                              f"Error: {last_error}. Full response ({len(candidate)} chars): {candidate}")
+        # Isolate the outermost {...} block (handles any stray prose the
+        # model adds before/after despite instructions not to).
+        start = clean.find("{")
+        end = clean.rfind("}")
+        candidate = clean[start:end + 1] if (start != -1 and end != -1 and end > start) else clean
+
+        parsed = None
+        for repaired in (candidate, repair_stray_quotes(candidate), repair_missing_commas(candidate),
+                         repair_missing_commas(repair_stray_quotes(candidate))):
+            try:
+                parsed = json.loads(repaired)
+                break
+            except json.JSONDecodeError as e:
+                last_error = str(e)
+
+        if parsed is None:
+            last_debug = (f"stop_reason: {data.get('stop_reason')}, usage: {data.get('usage')}, "
+                           f"response ({len(candidate)} chars): {candidate}")
+            continue  # retry — every repair failed to even parse
+
+        # Parsed successfully, but the response is only valid if it actually
+        # has the full required shape — a truncated/early-stopped response
+        # can sometimes still parse as valid JSON if it happens to be cut
+        # off at a spot that closes cleanly, while still being incomplete.
+        if len(parsed.get("paths", [])) != 4:
+            last_error = f"Got {len(parsed.get('paths', []))} paths, expected 4 (incomplete response)"
+            last_debug = f"stop_reason: {data.get('stop_reason')}, usage: {data.get('usage')}"
+            continue  # retry — parsed fine but incomplete
+
+        return parsed  # success
+
+    raise HTTPException(502, f"Could not get a complete analysis after 2 attempts. "
+                              f"Last error: {last_error}. Debug: {last_debug}")
 
 # ----------------------------------------------------------------------------
 # Analytics
