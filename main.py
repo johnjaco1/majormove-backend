@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  # reads .env in the current folder into the environment — required for local dev
 import json
+import re
 import time
 import hashlib
 import secrets
@@ -230,6 +231,16 @@ def repair_stray_quotes(text: str) -> str:
     return "".join(out)
 
 
+def repair_missing_commas(text: str) -> str:
+    """A `}` immediately followed by a `{` (ignoring whitespace) is never
+    valid JSON on its own — it always needs a comma between two sibling
+    objects in an array. The AI occasionally drops this comma. Inserting
+    one is always safe: it either fixes a real omission or, if the objects
+    weren't meant to be siblings, fails parsing the same way it already
+    would have without the insertion."""
+    return re.sub(r"\}(\s*)\{", r"},\1{", text)
+
+
 # ----------------------------------------------------------------------------
 # Catalog scraping — scrape-on-demand with cache
 # ----------------------------------------------------------------------------
@@ -405,39 +416,31 @@ Student:
                                   f"stop_reason: {data.get('stop_reason')}. "
                                   f"Full content (first 500 chars): {str(data['content'])[:500]}")
     clean = text.replace("```json", "").replace("```", "").strip()
-    try:
-        return json.loads(clean)
-    except json.JSONDecodeError:
-        # First repair attempt: fix stray quotes used for emphasis inside text
-        repaired = repair_stray_quotes(clean)
+
+    # Isolate the outermost {...} block up front (handles any stray prose
+    # the model adds before/after despite instructions not to).
+    start = clean.find("{")
+    end = clean.rfind("}")
+    candidate = clean[start:end + 1] if (start != -1 and end != -1 and end > start) else clean
+
+    # Try increasingly aggressive repairs, in order, until one parses.
+    attempts = [
+        candidate,
+        repair_stray_quotes(candidate),
+        repair_missing_commas(candidate),
+        repair_missing_commas(repair_stray_quotes(candidate)),
+    ]
+    last_error = None
+    for attempt in attempts:
         try:
-            return json.loads(repaired)
-        except json.JSONDecodeError:
-            pass
-        # Fallback: the model occasionally adds a stray sentence before/after
-        # the JSON despite instructions not to. Extract the outermost {...}
-        # block and try again before giving up.
-        start = clean.find("{")
-        end = clean.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            extracted = clean[start:end + 1]
-            try:
-                return json.loads(extracted)
-            except json.JSONDecodeError:
-                try:
-                    return json.loads(repair_stray_quotes(extracted))
-                except json.JSONDecodeError as e2:
-                    pos = e2.pos
-                    # Show generous context — JSON errors usually point just past
-                    # the actual problem, so lean heavily toward showing what's
-                    # BEFORE the reported position, not just around it.
-                    ctx_start = max(0, pos - 700)
-                    ctx_end = min(len(extracted), pos + 200)
-                    raise HTTPException(502, f"Could not parse AI response. Error: {e2}. "
-                                              f"Context (char {ctx_start}-{ctx_end}, error at {pos}): "
-                                              f"...{extracted[ctx_start:ctx_end]}...")
-        raise HTTPException(502, f"Could not parse AI response — no JSON object found. "
-                                  f"Raw response (first 800 chars): {clean[:800]}")
+            return json.loads(attempt)
+        except json.JSONDecodeError as e:
+            last_error = e
+
+    # Every repair failed — show the FULL text (not a truncated window) so
+    # the real problem is visible directly instead of guessing from a snippet.
+    raise HTTPException(502, f"Could not parse AI response after all repair attempts. "
+                              f"Error: {last_error}. Full response ({len(candidate)} chars): {candidate}")
 
 # ----------------------------------------------------------------------------
 # Analytics
