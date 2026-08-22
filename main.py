@@ -428,10 +428,14 @@ Student:
                     return json.loads(repair_stray_quotes(extracted))
                 except json.JSONDecodeError as e2:
                     pos = e2.pos
-                    ctx_start = max(0, pos - 300)
-                    ctx_end = min(len(extracted), pos + 300)
+                    # Show generous context — JSON errors usually point just past
+                    # the actual problem, so lean heavily toward showing what's
+                    # BEFORE the reported position, not just around it.
+                    ctx_start = max(0, pos - 700)
+                    ctx_end = min(len(extracted), pos + 200)
                     raise HTTPException(502, f"Could not parse AI response. Error: {e2}. "
-                                              f"Context around char {pos}: ...{extracted[ctx_start:ctx_end]}...")
+                                              f"Context (char {ctx_start}-{ctx_end}, error at {pos}): "
+                                              f"...{extracted[ctx_start:ctx_end]}...")
         raise HTTPException(502, f"Could not parse AI response — no JSON object found. "
                                   f"Raw response (first 800 chars): {clean[:800]}")
 
