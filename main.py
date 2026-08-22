@@ -406,7 +406,7 @@ Student:
                 headers={"x-api-key": ANTHROPIC_API_KEY,
                          "anthropic-version": "2023-06-01",
                          "content-type": "application/json"},
-                json={"model": ANTHROPIC_MODEL, "max_tokens": 3500,
+                json={"model": ANTHROPIC_MODEL, "max_tokens": 8000,
                       "messages": [{"role": "user", "content": content}]},
             )
         data = resp.json()
