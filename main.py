@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 load_dotenv()  # reads .env in the current folder into the environment — required for local dev
 import json
 import re
+import base64
 import time
 import hashlib
 import secrets
@@ -31,7 +32,17 @@ from fastapi import FastAPI, HTTPException, Depends, Header, UploadFile, File, F
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# Optional PDF extraction
+# PDF handling: PyMuPDF converts PDF pages to images so the AI reads the
+# transcript with real layout/vision understanding, instead of pypdf's
+# plain text extraction, which loses structure on multi-column academic
+# transcripts (side-by-side terms, tables) and was the root cause of
+# inaccurate credit/major reads on complex real transcripts.
+try:
+    import pymupdf
+    HAS_PYMUPDF = True
+except ImportError:
+    HAS_PYMUPDF = False
+
 try:
     from pypdf import PdfReader
     HAS_PYPDF = True
@@ -298,7 +309,29 @@ async def fetch_catalog(school: str, major: str) -> dict:
 # ----------------------------------------------------------------------------
 # Transcript parsing
 # ----------------------------------------------------------------------------
+def pdf_to_images(data: bytes, max_pages: int = 4) -> list[dict]:
+    """Convert PDF pages to base64 PNG images so the AI reads the transcript
+    visually (correct column/table layout) instead of via flattened text
+    extraction, which scrambles multi-column academic transcripts."""
+    if not HAS_PYMUPDF:
+        return []
+    images = []
+    try:
+        doc = pymupdf.open(stream=data, filetype="pdf")
+        for page in doc[:max_pages]:
+            pix = page.get_pixmap(dpi=150)
+            img_b64 = base64.b64encode(pix.tobytes("png")).decode()
+            images.append({"media_type": "image/png", "data": img_b64})
+        doc.close()
+    except Exception:
+        return []
+    return images
+
+
 def extract_pdf_text(data: bytes) -> str:
+    """Fallback text extraction — only used if PyMuPDF is unavailable.
+    Known to scramble multi-column transcript layouts; image conversion
+    above is the primary, more accurate path."""
     if not HAS_PYPDF:
         return ""
     try:
@@ -351,7 +384,7 @@ Simply do not use quotation marks of any kind inside your sentences. Rephrase in
 
 
 async def generate_analysis(answers: dict, catalog: dict, transcript_text: str,
-                             transcript_image_b64: Optional[str], image_media_type: Optional[str]) -> dict:
+                             transcript_images: list[dict]) -> dict:
     unl = is_unl(answers.get("school", ""))
     unl_block = (
         "This is a University of Nebraska-Lincoln student. Use SPECIFIC real UNL course codes "
@@ -372,6 +405,26 @@ async def generate_analysis(answers: dict, catalog: dict, transcript_text: str,
         if transcript_text else ""
     )
 
+    transcript_accuracy_rules = """
+If a transcript (image or text) is provided, read it with extreme care — this is a real
+academic record, not a summary, and mistakes here undermine the whole analysis:
+- Scan EVERY page and EVERY term, not just the most recent one.
+- Find the FINAL/most recent "Program:", "Major:", "Minor:", "Option:" declarations —
+  these change over time as a student changes majors, so use only the LATEST set, not
+  an earlier term's declarations.
+- The student may have MULTIPLE currently declared majors and/or minors simultaneously
+  (e.g. a double major, or a major plus one or more minors). List ALL of them in your
+  understanding of "current major" — do not silently pick just one if several are declared
+  in the latest term.
+- For "credits completed", use the CUMULATIVE EARNED HOURS (often labeled EHRS or
+  "Earned Hours") from the LAST/most recent term summary — not attempted hours (AHRS),
+  not an early term's total, and not a rough guess. Read the actual cumulative row.
+- When evaluating an alternative major, check the ENTIRE course history for classes that
+  would already count toward it (e.g. if evaluating Computer Science, check for any CS
+  courses already completed in ANY term) — do not assume "starting from scratch" without
+  checking.
+"""
+
     prompt = f"""You are MajorMove, an AI academic advisor whose purpose is to help a college student
 make a clearer, better decision about their major — and, in aggregate, to help their university
 retain and graduate more students. Be warm, honest, specific, never generic.
@@ -379,21 +432,24 @@ retain and graduate more students. Be warm, honest, specific, never generic.
 Student:
 - School: {answers.get('school')}
 - Year: {answers.get('year')}
-- Current major: {answers.get('major')}
+- Current major (as self-reported in the form — verify/expand using the transcript if provided): {answers.get('major')}
 - Interests: {', '.join(answers.get('interests', []))}
 - Career values: {', '.join(answers.get('values', []))}
 - Financial: {answers.get('financial')}
 {catalog_block}{transcript_block}
+{transcript_accuracy_rules}
 {unl_block}
 
 {ANALYSIS_SCHEMA}"""
 
-    if transcript_image_b64:
+    if transcript_images:
         content = [
             {"type": "image", "source": {"type": "base64",
-             "media_type": image_media_type or "image/jpeg", "data": transcript_image_b64}},
-            {"type": "text", "text": prompt + "\n\nA transcript image is attached — read completed courses/credits from it."},
-        ]
+             "media_type": img["media_type"], "data": img["data"]}}
+            for img in transcript_images
+        ] + [{"type": "text", "text": prompt +
+              f"\n\n{len(transcript_images)} transcript page image(s) are attached above — "
+              f"read every page carefully per the accuracy rules."}]
     else:
         content = prompt
 
@@ -486,7 +542,8 @@ class EventReq(BaseModel):
 # ----------------------------------------------------------------------------
 @app.get("/health")
 async def health():
-    return {"status": "ok", "pypdf": HAS_PYPDF, "serper": bool(SERPER_API_KEY), "ai": bool(ANTHROPIC_API_KEY)}
+    return {"status": "ok", "pypdf": HAS_PYPDF, "pymupdf": HAS_PYMUPDF,
+            "serper": bool(SERPER_API_KEY), "ai": bool(ANTHROPIC_API_KEY)}
 
 
 @app.post("/auth/signup")
@@ -538,32 +595,47 @@ async def analyze(
         "financial": financial,
     }
 
-    # Transcript: PDF → text; image → pass to model
+    # Transcript: PDF → converted to page images (accurate layout reading);
+    # image upload → passed through directly; both go to the model as vision
+    # input, since that reads real academic transcripts far more accurately
+    # than flattened text extraction (which scrambles multi-column layouts).
     # (Swagger's "Try it out" UI sometimes sends an empty string instead of
     # omitting the file entirely — treat anything that isn't a real UploadFile as "no file")
     t_text = transcript_text or ""
-    t_image_b64, t_media = None, None
-    if isinstance(transcript_file, UploadFile):
+    t_images: list[dict] = []
+    # Detect a real uploaded file by attributes, not by isinstance(UploadFile) —
+    # Starlette/FastAPI can hand back starlette.datastructures.UploadFile vs
+    # fastapi.datastructures.UploadFile depending on version, and isinstance
+    # against the wrong one silently (and incorrectly) treats a real upload
+    # as "no file", which is what was actually happening here.
+    is_real_upload = (
+        transcript_file is not None
+        and not isinstance(transcript_file, str)
+        and hasattr(transcript_file, "filename")
+        and hasattr(transcript_file, "read")
+    )
+    if is_real_upload:
         raw = await transcript_file.read()
         ctype = transcript_file.content_type or ""
         if ctype == "application/pdf" or transcript_file.filename.lower().endswith(".pdf"):
-            extracted = extract_pdf_text(raw)
-            t_text = (t_text + "\n" + extracted).strip()
+            t_images = pdf_to_images(raw)
+            if not t_images:  # PyMuPDF unavailable or conversion failed — fall back to text
+                extracted = extract_pdf_text(raw)
+                t_text = (t_text + "\n" + extracted).strip()
         elif ctype.startswith("image/"):
-            import base64
-            t_image_b64 = base64.b64encode(raw).decode()
-            t_media = ctype
+            t_images = [{"media_type": ctype, "data": base64.b64encode(raw).decode()}]
 
     catalog = await fetch_catalog(school, major)
     resolved_email = email or (user["email"] if user else None)
     log_event("analysis_started", anon_id=anon_id,
               user_id=user["id"] if user else None, school=school,
-              props={"major": major, "has_transcript": bool(t_text or t_image_b64),
-                     "transcript_kind": "text" if t_text else ("image" if t_image_b64 else "none"),
+              props={"major": major, "has_transcript": bool(t_text or t_images),
+                     "transcript_kind": "text" if t_text else ("image" if t_images else "none"),
+                     "transcript_page_count": len(t_images),
                      "email_provided": bool(resolved_email)})
 
     try:
-        result = await generate_analysis(answers, catalog, t_text, t_image_b64, t_media)
+        result = await generate_analysis(answers, catalog, t_text, t_images)
     except json.JSONDecodeError:
         raise HTTPException(502, "Could not parse AI response")
 
