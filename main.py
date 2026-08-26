@@ -719,3 +719,29 @@ async def emails(key: str):
         ).fetchall()
     return [{"email": r["email"], "school": r["school"], "major": r["major"],
              "created_at": r["created_at"]} for r in rows]
+
+
+@app.get("/admin/last_analysis")
+async def last_analysis(key: str):
+    """The most recently saved analysis, including its transcript-received
+    diagnostics — a quick way to check whether a specific run actually got
+    a transcript, without needing browser dev tools."""
+    if key != os.environ.get("ADMIN_KEY", "changeme"):
+        raise HTTPException(403, "Forbidden")
+    with db() as conn:
+        row = conn.execute(
+            "SELECT email, school, major, payload, created_at FROM roadmaps "
+            "ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+    if not row:
+        return {"message": "No analyses saved yet"}
+    payload = json.loads(row["payload"])
+    return {
+        "email": row["email"], "school": row["school"], "major": row["major"],
+        "created_at": row["created_at"],
+        "_transcript_pages_received": payload.get("_transcript_pages_received"),
+        "_transcript_text_received": payload.get("_transcript_text_received"),
+        "_transcript_file_uploaded": payload.get("_transcript_file_uploaded"),
+        "_catalog_verified": payload.get("_catalog_verified"),
+        "credits_completed_shown": payload.get("current", {}).get("credits_completed"),
+    }
