@@ -641,6 +641,9 @@ async def analyze(
 
     result["_catalog_source"] = catalog.get("source_url")
     result["_catalog_verified"] = catalog.get("verified", False)
+    result["_transcript_pages_received"] = len(t_images)
+    result["_transcript_text_received"] = bool(t_text)
+    result["_transcript_file_uploaded"] = is_real_upload
 
     with db() as conn:
         conn.execute(
