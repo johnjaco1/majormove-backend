@@ -456,15 +456,27 @@ Student:
     last_error = None
     last_debug = None
     for attempt_num in range(2):  # try once, then retry once more on any failure
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={"x-api-key": ANTHROPIC_API_KEY,
-                         "anthropic-version": "2023-06-01",
-                         "content-type": "application/json"},
-                json={"model": ANTHROPIC_MODEL, "max_tokens": 8000,
-                      "messages": [{"role": "user", "content": content}]},
-            )
+        try:
+            # 180s — real multi-page transcript images plus an 8000-token
+            # budget (which can include heavy internal reasoning) genuinely
+            # need more room than a short timeout; the old 60s was cutting
+            # off real requests mid-flight, surfacing as a raw connection
+            # failure ("Load failed") on the client instead of a clean error.
+            async with httpx.AsyncClient(timeout=180) as client:
+                resp = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={"x-api-key": ANTHROPIC_API_KEY,
+                             "anthropic-version": "2023-06-01",
+                             "content-type": "application/json"},
+                    json={"model": ANTHROPIC_MODEL, "max_tokens": 8000,
+                          "messages": [{"role": "user", "content": content}]},
+                )
+        except httpx.TimeoutException:
+            last_error = "Request to AI timed out after 180s"
+            continue
+        except httpx.HTTPError as e:
+            last_error = f"HTTP error contacting AI: {e}"
+            continue
         data = resp.json()
         if "content" not in data:
             last_error = f"AI error: {data.get('error', {}).get('message', 'unknown')}"
