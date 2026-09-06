@@ -49,6 +49,18 @@ try:
 except ImportError:
     HAS_PYPDF = False
 
+# Postgres (production, persists across deploys) vs SQLite (local dev only —
+# its local file gets wiped every time Railway rebuilds the container, which
+# is exactly what was silently erasing all saved users/roadmaps/emails
+# between deploys). Railway auto-injects DATABASE_URL when a Postgres
+# service is attached; its presence is what decides which backend runs.
+try:
+    import psycopg2
+    import psycopg2.extras
+    HAS_PSYCOPG2 = True
+except ImportError:
+    HAS_PSYCOPG2 = False
+
 # ----------------------------------------------------------------------------
 # Config
 # ----------------------------------------------------------------------------
@@ -56,6 +68,8 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 SERPER_API_KEY = os.environ.get("SERPER_API_KEY", "")
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
 DB_PATH = os.environ.get("DB_PATH", "majormove.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+USE_POSTGRES = bool(DATABASE_URL) and HAS_PSYCOPG2
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
 
 app = FastAPI(title="MajorMove API", version="1.0.0")
@@ -68,12 +82,78 @@ app.add_middleware(
 )
 
 # ----------------------------------------------------------------------------
-# Database (SQLite for MVP; swap DB_PATH/queries for Postgres in production)
+# Database (Postgres in production — persists across deploys; SQLite as a
+# local-dev fallback when DATABASE_URL isn't set, so `uvicorn main:app` still
+# works on a laptop with zero extra setup)
 # ----------------------------------------------------------------------------
+class _PGCursor:
+    """Wraps a psycopg2 cursor so calling code can use it exactly like a
+    sqlite3 cursor: conn.execute(sql, params).fetchone()/.fetchall(), plus
+    row["column"] dict-style access (via RealDictCursor) and .lastrowid
+    for INSERTs that need the new row's id back — none of which psycopg2
+    provides natively, but sqlite3 does, and the rest of this file was
+    written against sqlite3's interface."""
+    def __init__(self, raw_cursor):
+        self._cur = raw_cursor
+        self.lastrowid = None
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+
+class _PGConn:
+    def __init__(self, raw_conn):
+        self._conn = raw_conn
+
+    def execute(self, sql, params=()):
+        pg_sql = sql.replace("?", "%s")
+        is_insert = pg_sql.strip().upper().startswith("INSERT")
+        has_returning = "RETURNING" in pg_sql.upper()
+        # INSERT OR REPLACE (SQLite) has no Postgres equivalent syntax —
+        # every call site using it in this file targets catalog_cache,
+        # whose primary key is cache_key, so translate it to a real
+        # Postgres upsert rather than just swapping placeholders.
+        if pg_sql.strip().upper().startswith("INSERT OR REPLACE INTO CATALOG_CACHE"):
+            pg_sql = pg_sql.replace("INSERT OR REPLACE INTO catalog_cache", "INSERT INTO catalog_cache")
+            pg_sql += (" ON CONFLICT (cache_key) DO UPDATE SET "
+                       "school=EXCLUDED.school, major=EXCLUDED.major, content=EXCLUDED.content, "
+                       "source_url=EXCLUDED.source_url, verified=EXCLUDED.verified, scraped_at=EXCLUDED.scraped_at")
+        elif is_insert and not has_returning and "INSERT INTO users " in pg_sql:
+            # The only INSERT in this file whose caller reads .lastrowid
+            # right after — give Postgres a way to hand that id back too.
+            pg_sql += " RETURNING id"
+        cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(pg_sql, params)
+        wrapped = _PGCursor(cur)
+        if "RETURNING id" in pg_sql:
+            row = cur.fetchone()
+            wrapped.lastrowid = row["id"] if row else None
+        return wrapped
+
+    def executescript(self, sql):
+        cur = self._conn.cursor()
+        cur.execute(sql)  # Postgres accepts a multi-statement DDL string directly
+        cur.close()
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
+
 @contextmanager
 def db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    if USE_POSTGRES:
+        raw = psycopg2.connect(DATABASE_URL)
+        conn = _PGConn(raw)
+    else:
+        raw = sqlite3.connect(DB_PATH)
+        raw.row_factory = sqlite3.Row
+        conn = raw
     try:
         yield conn
         conn.commit()
@@ -83,51 +163,122 @@ def db():
 
 def init_db():
     with db() as conn:
-        conn.executescript("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            salt TEXT NOT NULL,
-            school TEXT,
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS sessions (
-            token TEXT PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id)
-        );
-        CREATE TABLE IF NOT EXISTS roadmaps (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            email TEXT,
-            school TEXT, year TEXT, major TEXT,
-            payload TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id)
-        );
-        -- Verified catalog cache: scrape-on-demand, then reuse
-        CREATE TABLE IF NOT EXISTS catalog_cache (
-            cache_key TEXT PRIMARY KEY,      -- school|major (lowercased)
-            school TEXT, major TEXT,
-            content TEXT NOT NULL,
-            source_url TEXT,
-            verified INTEGER DEFAULT 0,      -- 1 = human/UNL-verified, 0 = scraped
-            scraped_at TEXT NOT NULL
-        );
-        -- Analytics events
-        CREATE TABLE IF NOT EXISTS events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            anon_id TEXT,
-            user_id INTEGER,
-            name TEXT NOT NULL,
-            props TEXT,
-            school TEXT,
-            created_at TEXT NOT NULL
-        );
-        """)
+        if USE_POSTGRES:
+            conn.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                school TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS sessions (
+                token TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+            CREATE TABLE IF NOT EXISTS roadmaps (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER,
+                email TEXT,
+                school TEXT, year TEXT, major TEXT,
+                payload TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+            CREATE TABLE IF NOT EXISTS catalog_cache (
+                cache_key TEXT PRIMARY KEY,
+                school TEXT, major TEXT,
+                content TEXT NOT NULL,
+                source_url TEXT,
+                verified INTEGER DEFAULT 0,
+                scraped_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS events (
+                id SERIAL PRIMARY KEY,
+                anon_id TEXT,
+                user_id INTEGER,
+                name TEXT NOT NULL,
+                props TEXT,
+                school TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS outcomes (
+                id SERIAL PRIMARY KEY,
+                roadmap_id INTEGER,
+                email TEXT,
+                self_reported_outcome TEXT NOT NULL,
+                new_major TEXT,
+                notes TEXT,
+                reported_at TEXT NOT NULL,
+                FOREIGN KEY(roadmap_id) REFERENCES roadmaps(id)
+            );
+            """)
+        else:
+            conn.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                school TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS sessions (
+                token TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+            CREATE TABLE IF NOT EXISTS roadmaps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                email TEXT,
+                school TEXT, year TEXT, major TEXT,
+                payload TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+            -- Verified catalog cache: scrape-on-demand, then reuse
+            CREATE TABLE IF NOT EXISTS catalog_cache (
+                cache_key TEXT PRIMARY KEY,      -- school|major (lowercased)
+                school TEXT, major TEXT,
+                content TEXT NOT NULL,
+                source_url TEXT,
+                verified INTEGER DEFAULT 0,      -- 1 = human/UNL-verified, 0 = scraped
+                scraped_at TEXT NOT NULL
+            );
+            -- Analytics events
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                anon_id TEXT,
+                user_id INTEGER,
+                name TEXT NOT NULL,
+                props TEXT,
+                school TEXT,
+                created_at TEXT NOT NULL
+            );
+            -- Long-term outcome tracking: did a student who got an analysis
+            -- actually switch majors? Self-reported, since there's no real
+            -- integration with a university's official student records —
+            -- this is the honest, buildable version of that question, and
+            -- the exact dataset that raises MajorMove's value to almost
+            -- every realistic acquirer, not just one.
+            CREATE TABLE IF NOT EXISTS outcomes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                roadmap_id INTEGER,
+                email TEXT,
+                self_reported_outcome TEXT NOT NULL,  -- "stayed" or "switched"
+                new_major TEXT,                        -- if switched, to what
+                notes TEXT,
+                reported_at TEXT NOT NULL,
+                FOREIGN KEY(roadmap_id) REFERENCES roadmaps(id)
+            );
+            """)
 
 
 init_db()
@@ -358,8 +509,20 @@ ANALYSIS_SCHEMA = """Respond ONLY with valid JSON, no markdown:
       "success_likelihood": 82,
       "likelihood_reason": "one short sentence grounding the percent — fit to interests/values, market outlook, workload realism",
       "credits_transfer": "how many completed credits carry over, from transcript — 'All of them, you're already here' for current major",
+      "additional_credits_needed": 0,
       "extra_time": "0 semesters / 1 semester / 2 semesters — with a short reason",
       "honest_take": "one honest, specific sentence about real outcomes",
+      "reasoning_points": [
+        "specific, checkable reason — e.g. exact completed courses that count toward this major",
+        "specific, checkable reason — e.g. their strongest grades/subjects and how they connect",
+        "specific, checkable reason — e.g. exact credits or courses still needed",
+        "specific, checkable reason — e.g. how their stated interests connect to this major's careers"
+      ],
+      "fit_scores": {
+        "income": 75,
+        "balance": 60,
+        "creative_freedom": 40
+      },
       "careers": [{"title":"...","salary":"$X-$Y"},{"title":"...","salary":"$X-$Y"},{"title":"...","salary":"$X-$Y"}],
       "first_course": "specific course code + name to take first at their school",
       "financial_note": "scholarship/aid impact given their financial situation",
@@ -371,6 +534,21 @@ ANALYSIS_SCHEMA = """Respond ONLY with valid JSON, no markdown:
 }
 Include the current major as path 0 (is_current: true) plus exactly 3 alternative paths (is_current: false).
 Success likelihood should vary realistically (not all 80+). Be honest about salaries with real market data.
+For fit_scores (0-100 each, per path): "income" = how well this path's realistic earning potential
+matches a high-income priority; "balance" = how well the typical workload/hours in this field support
+work-life balance; "creative_freedom" = how much genuine creative or independent-thinking latitude the
+work involves day to day. These should vary meaningfully across paths and be honest, not padded — a
+path can honestly score low on one dimension while being strong on the others.
+
+For additional_credits_needed: your best real estimate of how many NEW credits (beyond what already
+transfers) this path requires, based on the transcript and catalog data — 0 for the current major.
+This number is used for real downstream cost math, so make it as accurate as you can, not a round guess.
+
+For reasoning_points: this is what makes a student actually trust the recommendation instead of treating
+it as a black box. Each point must reference something SPECIFIC and CHECKABLE — an actual completed
+course by name/code, an actual grade pattern, an actual credit count, or an actual stated interest —
+never a vague generic statement like "this seems like a good fit." A student reading these should be
+able to verify each one against their own transcript.
 
 ABSOLUTE RULE — this breaks the entire response if violated, follow it with zero exceptions:
 The double-quote character (") may ONLY appear as JSON structure (wrapping keys and string values).
@@ -381,6 +559,93 @@ WRONG (breaks parsing): "why_fit": "Explore this "seriously" before committing."
 RIGHT: "honest_take": "This is a great fit if you like data."
 RIGHT: "why_fit": "Seriously consider exploring this before committing."
 Simply do not use quotation marks of any kind inside your sentences. Rephrase instead of quoting."""
+
+
+async def call_ai_with_retry(content, validate_fn, max_tokens: int = 16000) -> dict:
+    """Shared, battle-tested AI-calling logic: retries once on any failure,
+    repairs common malformed-JSON patterns (stray quotes, missing commas),
+    and validates the parsed shape before accepting it — not just that it's
+    valid JSON, but that it's the COMPLETE shape expected. `validate_fn`
+    takes the parsed dict and returns (is_valid: bool, reason: str) so each
+    caller can define its own "did I actually get everything I asked for"
+    check without duplicating this retry machinery.
+    """
+    last_error = None
+    last_debug = None
+    for attempt_num in range(2):  # try once, then retry once more on any failure
+        try:
+            # 180s — real multi-page transcript images plus a large token
+            # budget (which can include heavy internal reasoning) genuinely
+            # need more room than a short timeout; a short timeout was
+            # cutting off real requests mid-flight, surfacing as a raw
+            # connection failure ("Load failed") on the client instead of
+            # a clean error.
+            async with httpx.AsyncClient(timeout=180) as client:
+                resp = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={"x-api-key": ANTHROPIC_API_KEY,
+                             "anthropic-version": "2023-06-01",
+                             "content-type": "application/json"},
+                    json={"model": ANTHROPIC_MODEL, "max_tokens": max_tokens,
+                          "messages": [{"role": "user", "content": content}]},
+                )
+        except httpx.TimeoutException:
+            last_error = f"Request to AI timed out after 180s"
+            continue
+        except httpx.HTTPError as e:
+            last_error = f"HTTP error contacting AI: {e}"
+            continue
+        data = resp.json()
+        if "content" not in data:
+            last_error = f"AI error: {data.get('error', {}).get('message', 'unknown')}"
+            continue
+        text = "".join(b["text"] for b in data["content"] if b.get("type") == "text")
+        if not text.strip():
+            last_error = f"AI returned no text content. stop_reason: {data.get('stop_reason')}"
+            continue
+        clean = text.replace("```json", "").replace("```", "").strip()
+
+        # Isolate the outermost {...} block (handles any stray prose the
+        # model adds before/after despite instructions not to).
+        start = clean.find("{")
+        end = clean.rfind("}")
+        candidate = clean[start:end + 1] if (start != -1 and end != -1 and end > start) else clean
+
+        parsed = None
+        for repaired in (candidate, repair_stray_quotes(candidate), repair_missing_commas(candidate),
+                         repair_missing_commas(repair_stray_quotes(candidate))):
+            try:
+                parsed = json.loads(repaired)
+                break
+            except json.JSONDecodeError as e:
+                last_error = str(e)
+
+        if parsed is None:
+            last_debug = (f"stop_reason: {data.get('stop_reason')}, usage: {data.get('usage')}, "
+                           f"response ({len(candidate)} chars): {candidate}")
+            continue  # retry — every repair failed to even parse
+
+        # Parsed successfully, but only valid if it's actually the COMPLETE
+        # shape expected — a truncated/early-stopped response can sometimes
+        # still parse as valid JSON if cut off at a spot that closes cleanly,
+        # while still being genuinely incomplete.
+        is_valid, reason = validate_fn(parsed)
+        if not is_valid:
+            last_error = reason
+            last_debug = f"stop_reason: {data.get('stop_reason')}, usage: {data.get('usage')}"
+            continue  # retry — parsed fine but incomplete/wrong shape
+
+        return parsed  # success
+
+    raise HTTPException(502, f"Could not get a complete response after 2 attempts. "
+                              f"Last error: {last_error}. Debug: {last_debug}")
+
+
+def _validate_analysis(parsed: dict) -> tuple[bool, str]:
+    n = len(parsed.get("paths", []))
+    if n != 4:
+        return False, f"Got {n} paths, expected 4 (incomplete response)"
+    return True, ""
 
 
 async def generate_analysis(answers: dict, catalog: dict, transcript_text: str,
@@ -453,73 +718,161 @@ Student:
     else:
         content = prompt
 
-    last_error = None
-    last_debug = None
-    for attempt_num in range(2):  # try once, then retry once more on any failure
-        try:
-            # 180s — real multi-page transcript images plus an 8000-token
-            # budget (which can include heavy internal reasoning) genuinely
-            # need more room than a short timeout; the old 60s was cutting
-            # off real requests mid-flight, surfacing as a raw connection
-            # failure ("Load failed") on the client instead of a clean error.
-            async with httpx.AsyncClient(timeout=180) as client:
-                resp = await client.post(
-                    "https://api.anthropic.com/v1/messages",
-                    headers={"x-api-key": ANTHROPIC_API_KEY,
-                             "anthropic-version": "2023-06-01",
-                             "content-type": "application/json"},
-                    json={"model": ANTHROPIC_MODEL, "max_tokens": 16000,
-                          "messages": [{"role": "user", "content": content}]},
-                )
-        except httpx.TimeoutException:
-            last_error = "Request to AI timed out after 180s"
-            continue
-        except httpx.HTTPError as e:
-            last_error = f"HTTP error contacting AI: {e}"
-            continue
-        data = resp.json()
-        if "content" not in data:
-            last_error = f"AI error: {data.get('error', {}).get('message', 'unknown')}"
-            continue
-        text = "".join(b["text"] for b in data["content"] if b.get("type") == "text")
-        if not text.strip():
-            last_error = f"AI returned no text content. stop_reason: {data.get('stop_reason')}"
-            continue
-        clean = text.replace("```json", "").replace("```", "").strip()
+    return await call_ai_with_retry(content, _validate_analysis, max_tokens=16000)
 
-        # Isolate the outermost {...} block (handles any stray prose the
-        # model adds before/after despite instructions not to).
-        start = clean.find("{")
-        end = clean.rfind("}")
-        candidate = clean[start:end + 1] if (start != -1 and end != -1 and end > start) else clean
 
-        parsed = None
-        for repaired in (candidate, repair_stray_quotes(candidate), repair_missing_commas(candidate),
-                         repair_missing_commas(repair_stray_quotes(candidate))):
-            try:
-                parsed = json.loads(repaired)
-                break
-            except json.JSONDecodeError as e:
-                last_error = str(e)
+# ----------------------------------------------------------------------------
+# Career exploration — a SEPARATE, lightweight, text-only call. Deliberately
+# does NOT re-read the transcript images: career fit comes from interests,
+# values, and declared major (all already-known form inputs), not from
+# precise credit-by-credit transcript accuracy. Keeping this call text-only
+# and each card lean is what keeps ~18-20 careers fast and cheap instead of
+# repeating the token-budget/timeout problems a giant single call caused.
+# ----------------------------------------------------------------------------
+CAREERS_SCHEMA = """Respond ONLY with valid JSON, no markdown:
+{
+  "careers": [
+    {
+      "title": "Job title",
+      "why_it_fits": "One honest sentence connecting this to their specific interests/values/major",
+      "salary_range": "$X-$Y, realistic entry-level to a few years in",
+      "day_in_the_life": "One or two sentences, concrete and specific, not generic",
+      "how_to_get_there": "One sentence — from their current position, what's the realistic first step",
+      "growth_outlook": "One short phrase on demand/growth for this role"
+    }
+  ]
+}
+Generate exactly 18 careers. They should span a real range — some closely tied to their
+current/likely major, some more exploratory based on interests they mentioned, some that
+connect two interests together in a way they may not have considered. Vary salary ranges
+honestly — not everything should be high-paying. No duplicates. No generic filler titles.
+CRITICAL: never use a double-quote character (") inside any string value — it breaks JSON
+parsing. Use single quotes ('like this') if you need to quote a phrase, or better, just
+rephrase to avoid quoting at all."""
 
-        if parsed is None:
-            last_debug = (f"stop_reason: {data.get('stop_reason')}, usage: {data.get('usage')}, "
-                           f"response ({len(candidate)} chars): {candidate}")
-            continue  # retry — every repair failed to even parse
 
-        # Parsed successfully, but the response is only valid if it actually
-        # has the full required shape — a truncated/early-stopped response
-        # can sometimes still parse as valid JSON if it happens to be cut
-        # off at a spot that closes cleanly, while still being incomplete.
-        if len(parsed.get("paths", [])) != 4:
-            last_error = f"Got {len(parsed.get('paths', []))} paths, expected 4 (incomplete response)"
-            last_debug = f"stop_reason: {data.get('stop_reason')}, usage: {data.get('usage')}"
-            continue  # retry — parsed fine but incomplete
+def _validate_careers(parsed: dict) -> tuple[bool, str]:
+    n = len(parsed.get("careers", []))
+    if n < 12:  # allow some slack below the requested 18, but not a near-empty response
+        return False, f"Got only {n} careers, expected around 18 (incomplete response)"
+    return True, ""
 
-        return parsed  # success
 
-    raise HTTPException(502, f"Could not get a complete analysis after 2 attempts. "
-                              f"Last error: {last_error}. Debug: {last_debug}")
+async def generate_careers(answers: dict, unl: bool) -> dict:
+    unl_block = (
+        "This is a University of Nebraska-Lincoln student — where relevant, mention real "
+        "UNL resources like the Business Career Center or Explore Center as a next step."
+        if unl else ""
+    )
+    prompt = f"""You are MajorMove's career exploration feature. Based on this student's
+profile, generate a broad, honest, specific set of career options they may not have
+fully considered — this is meant to be explored and scrolled through, not just their
+one "correct" answer.
+
+Student:
+- School: {answers.get('school')}
+- Year: {answers.get('year')}
+- Current/declared major: {answers.get('major')}
+- Interests: {', '.join(answers.get('interests', []))}
+- Career values: {', '.join(answers.get('values', []))}
+{unl_block}
+
+{CAREERS_SCHEMA}"""
+
+    return await call_ai_with_retry(prompt, _validate_careers, max_tokens=6000)
+
+
+# ----------------------------------------------------------------------------
+# Major browsing + search — a broad, browsable list of compatible majors,
+# separate from the deep 4-path analysis. Same lightweight, text-only, no
+# transcript-images design as careers, for the same reason: this doesn't
+# need transcript-level precision, just interests/values/major context.
+# ----------------------------------------------------------------------------
+MAJORS_LIST_SCHEMA = """Respond ONLY with valid JSON, no markdown:
+{
+  "majors": [
+    {
+      "name": "Major name",
+      "fit_percentage": 82,
+      "one_liner": "One honest sentence on why this fits their specific interests/values",
+      "salary_range": "$X-$Y, realistic entry-level"
+    }
+  ]
+}
+Generate exactly 10 majors, ranked by fit_percentage descending. Include their current major
+if it genuinely belongs in a top-10 fit list — don't force it in artificially if it doesn't.
+Vary fit_percentage honestly (not all 80+). No duplicates. No generic filler names.
+CRITICAL: never use a double-quote character (") inside any string value — use single quotes
+('like this') instead, or rephrase to avoid quoting entirely."""
+
+MAJOR_SEARCH_SCHEMA = """Respond ONLY with valid JSON, no markdown:
+{
+  "name": "the exact major name searched for",
+  "fit_percentage": 68,
+  "one_liner": "One honest sentence on why this does or doesn't fit their specific interests/values",
+  "salary_range": "$X-$Y, realistic entry-level"
+}
+Be honest — if this major is a poor fit for their stated interests/values, say so plainly and
+give an honest, lower fit_percentage rather than padding it. CRITICAL: never use a double-quote
+character (") inside any string value."""
+
+
+def _validate_majors_list(parsed: dict) -> tuple[bool, str]:
+    n = len(parsed.get("majors", []))
+    if n < 7:  # allow some slack below the requested 10, but not a near-empty response
+        return False, f"Got only {n} majors, expected around 10 (incomplete response)"
+    return True, ""
+
+
+def _validate_major_search(parsed: dict) -> tuple[bool, str]:
+    if not parsed.get("name") or "fit_percentage" not in parsed:
+        return False, "Missing required fields in single-major search result"
+    return True, ""
+
+
+async def generate_majors_list(answers: dict, unl: bool) -> dict:
+    unl_block = (
+        "This is a University of Nebraska-Lincoln student — favor real UNL majors where possible."
+        if unl else ""
+    )
+    prompt = f"""You are MajorMove's major exploration feature. Based on this student's profile,
+generate a broad, honest, ranked list of majors that could fit them — meant to be browsed,
+not just their one deep-dive comparison.
+
+Student:
+- School: {answers.get('school')}
+- Year: {answers.get('year')}
+- Current/declared major: {answers.get('major')}
+- Interests: {', '.join(answers.get('interests', []))}
+- Career values: {', '.join(answers.get('values', []))}
+{unl_block}
+
+{MAJORS_LIST_SCHEMA}"""
+
+    return await call_ai_with_retry(prompt, _validate_majors_list, max_tokens=3000)
+
+
+async def generate_major_search(answers: dict, search_major: str, unl: bool) -> dict:
+    unl_block = (
+        f"This is a University of Nebraska-Lincoln student — if {search_major} is offered at "
+        f"UNL, reference it specifically; if you're not certain it's offered there, say so."
+        if unl else ""
+    )
+    prompt = f"""You are MajorMove's major search feature. A student has a SPECIFIC major in
+mind — evaluate honestly whether it fits them, don't just confirm whatever they typed.
+
+Student:
+- School: {answers.get('school')}
+- Year: {answers.get('year')}
+- Current/declared major: {answers.get('major')}
+- Interests: {', '.join(answers.get('interests', []))}
+- Career values: {', '.join(answers.get('values', []))}
+- Major they're asking about: {search_major}
+{unl_block}
+
+{MAJOR_SEARCH_SCHEMA}"""
+
+    return await call_ai_with_retry(prompt, _validate_major_search, max_tokens=800)
 
 # ----------------------------------------------------------------------------
 # Analytics
@@ -549,6 +902,12 @@ class EventReq(BaseModel):
     props: Optional[dict] = None
     school: Optional[str] = None
 
+class OutcomeReq(BaseModel):
+    email: str
+    self_reported_outcome: str  # "stayed" or "switched"
+    new_major: Optional[str] = None
+    notes: Optional[str] = None
+
 # ----------------------------------------------------------------------------
 # Routes
 # ----------------------------------------------------------------------------
@@ -562,6 +921,9 @@ async def health():
 async def signup(req: SignupReq):
     salt = secrets.token_hex(16)
     pw = hash_password(req.password, salt)
+    duplicate_email_errors = (sqlite3.IntegrityError,)
+    if USE_POSTGRES:
+        duplicate_email_errors = (sqlite3.IntegrityError, psycopg2.IntegrityError)
     try:
         with db() as conn:
             cur = conn.execute(
@@ -569,7 +931,7 @@ async def signup(req: SignupReq):
                 (req.email.lower(), pw, salt, req.school, datetime.utcnow().isoformat()),
             )
             uid = cur.lastrowid
-    except sqlite3.IntegrityError:
+    except duplicate_email_errors:
         raise HTTPException(400, "Email already registered")
     token = new_session(uid)
     log_event("signup", user_id=uid, school=req.school)
@@ -597,6 +959,8 @@ async def analyze(
     transcript_text: str = Form(""),
     anon_id: str = Form(None),
     email: str = Form(None),
+    cost_per_credit: str = Form(""),  # optional, student-provided, e.g. "450" — used for
+                                       # real deterministic cost math, never AI-guessed
     transcript_file: Union[UploadFile, str, None] = File(None),
     user: Optional[dict] = Depends(current_user),
 ):
@@ -657,6 +1021,22 @@ async def analyze(
     result["_transcript_text_received"] = bool(t_text)
     result["_transcript_file_uploaded"] = is_real_upload
 
+    # Real cost math, computed here in Python — never left to the AI to guess.
+    # Tuition varies wildly by school (in-state/out-of-state, public/private,
+    # per-credit rates), and a confidently-stated wrong dollar figure is worse
+    # than showing none at all. Only compute this if the student gave us their
+    # own real per-credit rate; simple multiplication on their real number.
+    try:
+        rate = float(cost_per_credit) if cost_per_credit.strip() else None
+    except ValueError:
+        rate = None
+    for path in result.get("paths", []):
+        extra_credits = path.get("additional_credits_needed")
+        if rate is not None and isinstance(extra_credits, (int, float)):
+            path["estimated_cost_delta"] = round(extra_credits * rate, 2)
+        else:
+            path["estimated_cost_delta"] = None
+
     with db() as conn:
         conn.execute(
             "INSERT INTO roadmaps (user_id, email, school, year, major, payload, created_at) VALUES (?,?,?,?,?,?,?)",
@@ -666,6 +1046,91 @@ async def analyze(
     log_event("analysis_completed", anon_id=anon_id,
               user_id=user["id"] if user else None, school=school)
     return result
+
+
+@app.post("/careers")
+async def careers(
+    school: str = Form(...),
+    year: str = Form(...),
+    major: str = Form(...),
+    interests: str = Form(""),
+    values: str = Form(""),
+    anon_id: str = Form(None),
+    user: Optional[dict] = Depends(current_user),
+):
+    """Lightweight, text-only career exploration — deliberately separate
+    from /analyze. No transcript, no images, no catalog scraping: career
+    fit comes from interests/values/major, which are already-known form
+    inputs. This keeps it fast and cheap, and avoids the exact token-budget
+    and timeout failure modes that a giant single call caused before."""
+    answers = {
+        "school": school, "major": major,
+        "interests": [i for i in interests.split(",") if i],
+        "values": [v for v in values.split(",") if v],
+    }
+    log_event("careers_started", anon_id=anon_id,
+              user_id=user["id"] if user else None, school=school,
+              props={"major": major})
+
+    result = await generate_careers(answers, is_unl(school))
+    log_event("careers_completed", anon_id=anon_id,
+              user_id=user["id"] if user else None, school=school,
+              props={"career_count": len(result.get("careers", []))})
+    return result
+
+
+@app.post("/majors")
+async def majors_list(
+    school: str = Form(...),
+    year: str = Form(...),
+    major: str = Form(...),
+    interests: str = Form(""),
+    values: str = Form(""),
+    anon_id: str = Form(None),
+    user: Optional[dict] = Depends(current_user),
+):
+    """Top 10 compatible majors — a broad browse list, separate from the
+    deep 4-path analysis. Same lightweight design as /careers."""
+    answers = {
+        "school": school, "major": major,
+        "interests": [i for i in interests.split(",") if i],
+        "values": [v for v in values.split(",") if v],
+    }
+    log_event("majors_list_started", anon_id=anon_id,
+              user_id=user["id"] if user else None, school=school, props={"major": major})
+
+    result = await generate_majors_list(answers, is_unl(school))
+    log_event("majors_list_completed", anon_id=anon_id,
+              user_id=user["id"] if user else None, school=school,
+              props={"major_count": len(result.get("majors", []))})
+    return result
+
+
+@app.post("/majors/search")
+async def majors_search(
+    school: str = Form(...),
+    year: str = Form(...),
+    major: str = Form(...),
+    interests: str = Form(""),
+    values: str = Form(""),
+    search_major: str = Form(...),
+    anon_id: str = Form(None),
+    user: Optional[dict] = Depends(current_user),
+):
+    """A student has a specific major in mind — evaluate it honestly,
+    same lightweight pattern as the top-10 list, just for one item."""
+    if not search_major.strip():
+        raise HTTPException(400, "search_major is required")
+    answers = {
+        "school": school, "major": major,
+        "interests": [i for i in interests.split(",") if i],
+        "values": [v for v in values.split(",") if v],
+    }
+    log_event("major_search", anon_id=anon_id,
+              user_id=user["id"] if user else None, school=school,
+              props={"searched": search_major})
+
+    return await generate_major_search(answers, search_major.strip(), is_unl(school))
 
 
 @app.get("/me/roadmaps")
@@ -756,4 +1221,57 @@ async def last_analysis(key: str):
         "_transcript_file_uploaded": payload.get("_transcript_file_uploaded"),
         "_catalog_verified": payload.get("_catalog_verified"),
         "credits_completed_shown": payload.get("current", {}).get("credits_completed"),
+    }
+
+
+@app.post("/outcome")
+async def report_outcome(req: OutcomeReq):
+    """A student self-reports, weeks or months later, whether they actually
+    switched majors after using MajorMove. Honest by design: there's no real
+    integration with a university's official student records, so this is
+    the buildable, truthful version — self-reported, not auto-verified.
+    Linked to their most recent saved roadmap by email, if one exists.
+    This is the exact dataset that makes MajorMove's real-world impact
+    provable to almost any acquirer, not just one."""
+    if req.self_reported_outcome not in ("stayed", "switched"):
+        raise HTTPException(400, "self_reported_outcome must be 'stayed' or 'switched'")
+    with db() as conn:
+        roadmap = conn.execute(
+            "SELECT id FROM roadmaps WHERE email=? ORDER BY created_at DESC LIMIT 1",
+            (req.email.lower(),),
+        ).fetchone()
+        roadmap_id = roadmap["id"] if roadmap else None
+        conn.execute(
+            "INSERT INTO outcomes (roadmap_id, email, self_reported_outcome, new_major, notes, reported_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (roadmap_id, req.email.lower(), req.self_reported_outcome, req.new_major, req.notes,
+             datetime.utcnow().isoformat()),
+        )
+    log_event("outcome_reported", props={"outcome": req.self_reported_outcome})
+    return {"ok": True, "message": "Thanks for letting us know — this genuinely helps."}
+
+
+@app.get("/admin/outcomes")
+async def admin_outcomes(key: str):
+    """All self-reported outcomes so far — the real-world impact dataset."""
+    if key != os.environ.get("ADMIN_KEY", "changeme"):
+        raise HTTPException(403, "Forbidden")
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT email, self_reported_outcome, new_major, notes, reported_at FROM outcomes "
+            "ORDER BY reported_at DESC"
+        ).fetchall()
+        switched = conn.execute(
+            "SELECT COUNT(*) c FROM outcomes WHERE self_reported_outcome='switched'"
+        ).fetchone()["c"]
+        stayed = conn.execute(
+            "SELECT COUNT(*) c FROM outcomes WHERE self_reported_outcome='stayed'"
+        ).fetchone()["c"]
+    return {
+        "total_reported": switched + stayed,
+        "switched": switched,
+        "stayed": stayed,
+        "reports": [{"email": r["email"], "outcome": r["self_reported_outcome"],
+                     "new_major": r["new_major"], "notes": r["notes"],
+                     "reported_at": r["reported_at"]} for r in rows],
     }
