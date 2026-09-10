@@ -525,15 +525,27 @@ ANALYSIS_SCHEMA = """Respond ONLY with valid JSON, no markdown:
       },
       "careers": [{"title":"...","salary":"$X-$Y"},{"title":"...","salary":"$X-$Y"},{"title":"...","salary":"$X-$Y"}],
       "first_course": "specific course code + name to take first at their school",
-      "financial_note": "scholarship/aid impact given their financial situation",
-      "why_fit": "one sentence on why this fits (or doesn't) THIS student specifically"
+      "financial_note": "scholarship/aid impact given their financial situation — ONE short sentence, max 18 words",
+      "why_fit": "one short sentence, max 15 words, on why this fits (or doesn't) THIS student specifically"
     }
   ],
-  "retention_nudge": "one concrete, encouraging next step + specific office/advisor to visit — written to keep this student engaged and enrolled",
-  "closing": "short warm sign-off"
+  "retention_nudge": "ONE short, specific next action — name the office/advisor and what to ask, max 20 words total, no compound run-on sentences",
+  "closing": "short warm sign-off, max 12 words"
 }
 Include the current major as path 0 (is_current: true) plus exactly 3 alternative paths (is_current: false).
 Success likelihood should vary realistically (not all 80+). Be honest about salaries with real market data.
+
+BREVITY IS MANDATORY, not a style preference. Every sentence in every field must be short and scannable —
+this is read on a phone, not a report. Never write a compound sentence joining two ideas with "though",
+"but", "which", or a comma-and-clause — if you have two ideas, that's two reasoning_points, not one long
+sentence. Maximum ~18 words per sentence everywhere in this response, no exceptions.
+
+ACCURACY RULE for anything citing a specific grade or number from the transcript: only state a specific
+letter grade, GPA, or credit count if you are CERTAIN of it from what's actually shown. If you're not
+certain of the exact grade, describe the pattern instead (e.g. "solid performance in your econ courses")
+rather than stating a specific letter grade you might get wrong — a wrong specific claim is worse than an
+honest general one.
+
 For fit_scores (0-100 each, per path): "income" = how well this path's realistic earning potential
 matches a high-income priority; "balance" = how well the typical workload/hours in this field support
 work-life balance; "creative_freedom" = how much genuine creative or independent-thinking latitude the
@@ -547,8 +559,8 @@ This number is used for real downstream cost math, so make it as accurate as you
 For reasoning_points: this is what makes a student actually trust the recommendation instead of treating
 it as a black box. Each point must reference something SPECIFIC and CHECKABLE — an actual completed
 course by name/code, an actual grade pattern, an actual credit count, or an actual stated interest —
-never a vague generic statement like "this seems like a good fit." A student reading these should be
-able to verify each one against their own transcript.
+never a vague generic statement like "this seems like a good fit." Each point is ONE short sentence,
+max 16 words. A student reading these should be able to verify each one against their own transcript.
 
 ABSOLUTE RULE — this breaks the entire response if violated, follow it with zero exceptions:
 The double-quote character (") may ONLY appear as JSON structure (wrapping keys and string values).
@@ -648,6 +660,75 @@ def _validate_analysis(parsed: dict) -> tuple[bool, str]:
     return True, ""
 
 
+EXTRACTION_SCHEMA = """Respond ONLY with valid JSON, no markdown:
+{
+  "declared_majors": ["exact major name(s) from the LATEST term's declaration"],
+  "declared_minors": ["exact minor name(s) from the LATEST term's declaration, if any"],
+  "cumulative_credits_completed": 83,
+  "cumulative_credits_note": "e.g. 'of ~120 required' if visible on the transcript",
+  "gpa": "cumulative GPA if visible, else null",
+  "completed_courses": [
+    {"code": "CSCE 155H", "grade": "A"}
+  ]
+}
+List EVERY completed course from EVERY term, not just the most recent one — this is used
+to check what already counts toward alternative majors, so completeness matters more than
+brevity here. Use cumulative EARNED HOURS (EHRS), not attempted hours (AHRS), for credits.
+Find the LATEST "Program:"/"Major:"/"Minor:" declarations — a student's major changes over
+time, so use only the most recent set, not an earlier term's. CRITICAL: never use a
+double-quote character (") inside any string value."""
+
+
+def _validate_extraction(parsed: dict) -> tuple[bool, str]:
+    if not isinstance(parsed.get("declared_majors"), list) or not parsed.get("declared_majors"):
+        return False, "Missing or empty declared_majors in extraction"
+    if "cumulative_credits_completed" not in parsed:
+        return False, "Missing cumulative_credits_completed in extraction"
+    return True, ""
+
+
+async def extract_transcript_facts(transcript_images: list[dict]) -> dict:
+    """Stage 1 of the analysis pipeline: a fast, narrow, vision-based pass that
+    only pulls out raw facts (majors, minors, credits, course list) — no
+    reasoning, no prose, no 4-path comparison. Deliberately lean output (a
+    structured list, not paragraphs) so this call is genuinely fast, unlike
+    the old single combined call that did vision AND full analysis writing
+    at once. Stage 2 (generate_analysis below) then reasons over these
+    extracted facts as plain text, with no images — removing the vision
+    overhead from the slow, heavy-output reasoning step entirely."""
+    prompt = f"""Extract structured facts from this academic transcript. Do NOT analyze,
+compare majors, or write any reasoning — just extract what's actually on the page.
+
+{EXTRACTION_SCHEMA}"""
+    content = [
+        {"type": "image", "source": {"type": "base64",
+         "media_type": img["media_type"], "data": img["data"]}}
+        for img in transcript_images
+    ] + [{"type": "text", "text": prompt}]
+
+    return await call_ai_with_retry(content, _validate_extraction, max_tokens=4000)
+
+
+def format_extracted_facts(facts: dict) -> str:
+    """Turn the lean extraction result into a clean, readable text block for
+    the (now always text-only) main analysis prompt."""
+    lines = [
+        f"Declared major(s): {', '.join(facts.get('declared_majors', [])) or 'none listed'}",
+    ]
+    if facts.get("declared_minors"):
+        lines.append(f"Declared minor(s): {', '.join(facts['declared_minors'])}")
+    credits = facts.get("cumulative_credits_completed")
+    note = facts.get("cumulative_credits_note", "")
+    lines.append(f"Cumulative credits completed: {credits}{f' ({note})' if note else ''}")
+    if facts.get("gpa"):
+        lines.append(f"Cumulative GPA: {facts['gpa']}")
+    courses = facts.get("completed_courses", [])
+    if courses:
+        lines.append(f"Completed courses ({len(courses)} total):")
+        lines.extend(f"  - {c.get('code', '?')}: {c.get('grade', '?')}" for c in courses)
+    return "\n".join(lines)
+
+
 async def generate_analysis(answers: dict, catalog: dict, transcript_text: str,
                              transcript_images: list[dict]) -> dict:
     unl = is_unl(answers.get("school", ""))
@@ -665,29 +746,37 @@ async def generate_analysis(answers: dict, catalog: dict, transcript_text: str,
         if catalog.get("content") else
         "\n(No catalog data retrieved — use best known info and flag for verification.)\n"
     )
+
+    # Stage 1: if we have transcript IMAGES (not already-pasted text), run the
+    # fast extraction pass first, then reason over its plain-text output —
+    # this keeps the expensive/slow vision step narrow, and makes the main
+    # reasoning call below always text-only, regardless of the original
+    # input type. If extraction itself fails for any reason, fall back to
+    # the original (slower, but proven) approach of sending images directly
+    # to the main call, rather than letting the whole request fail.
+    fallback_to_images = False
+    if transcript_images and not transcript_text:
+        try:
+            facts = await extract_transcript_facts(transcript_images)
+            transcript_text = format_extracted_facts(facts)
+        except HTTPException:
+            fallback_to_images = True
+
     transcript_block = (
-        f"\nTRANSCRIPT (pasted) — base credit-transfer and graduation timing on this:\n{transcript_text}\n"
+        f"\nTRANSCRIPT FACTS — base credit-transfer and graduation timing on this:\n{transcript_text}\n"
         if transcript_text else ""
     )
 
     transcript_accuracy_rules = """
-If a transcript (image or text) is provided, read it with extreme care — this is a real
+If transcript facts are provided above, read them with extreme care — this is a real
 academic record, not a summary, and mistakes here undermine the whole analysis:
-- Scan EVERY page and EVERY term, not just the most recent one.
-- Find the FINAL/most recent "Program:", "Major:", "Minor:", "Option:" declarations —
-  these change over time as a student changes majors, so use only the LATEST set, not
-  an earlier term's declarations.
 - The student may have MULTIPLE currently declared majors and/or minors simultaneously
   (e.g. a double major, or a major plus one or more minors). List ALL of them in your
-  understanding of "current major" — do not silently pick just one if several are declared
-  in the latest term.
-- For "credits completed", use the CUMULATIVE EARNED HOURS (often labeled EHRS or
-  "Earned Hours") from the LAST/most recent term summary — not attempted hours (AHRS),
-  not an early term's total, and not a rough guess. Read the actual cumulative row.
-- When evaluating an alternative major, check the ENTIRE course history for classes that
-  would already count toward it (e.g. if evaluating Computer Science, check for any CS
-  courses already completed in ANY term) — do not assume "starting from scratch" without
-  checking.
+  understanding of "current major" — do not silently pick just one.
+- Use the cumulative credits figure given — do not guess a different number.
+- When evaluating an alternative major, check the FULL completed-courses list for classes
+  that would already count toward it (e.g. if evaluating Computer Science, check for any
+  CS courses already completed) — do not assume "starting from scratch" without checking.
 """
 
     prompt = f"""You are MajorMove, an AI academic advisor whose purpose is to help a college student
@@ -697,7 +786,7 @@ retain and graduate more students. Be warm, honest, specific, never generic.
 Student:
 - School: {answers.get('school')}
 - Year: {answers.get('year')}
-- Current major (as self-reported in the form — verify/expand using the transcript if provided): {answers.get('major')}
+- Current major (as self-reported in the form — verify/expand using the transcript facts if provided): {answers.get('major')}
 - Interests: {', '.join(answers.get('interests', []))}
 - Career values: {', '.join(answers.get('values', []))}
 - Financial: {answers.get('financial')}
@@ -707,16 +796,16 @@ Student:
 
 {ANALYSIS_SCHEMA}"""
 
-    if transcript_images:
+    if fallback_to_images:
         content = [
             {"type": "image", "source": {"type": "base64",
              "media_type": img["media_type"], "data": img["data"]}}
             for img in transcript_images
         ] + [{"type": "text", "text": prompt +
               f"\n\n{len(transcript_images)} transcript page image(s) are attached above — "
-              f"read every page carefully per the accuracy rules."}]
+              f"read every page carefully."}]
     else:
-        content = prompt
+        content = prompt  # always text-only now in the normal (non-fallback) case
 
     return await call_ai_with_retry(content, _validate_analysis, max_tokens=16000)
 
@@ -729,16 +818,112 @@ Student:
 # and each card lean is what keeps ~18-20 careers fast and cheap instead of
 # repeating the token-budget/timeout problems a giant single call caused.
 # ----------------------------------------------------------------------------
+# Career databank — a static, curated list of real careers for common majors.
+# For any major in this databank, careers return INSTANTLY with zero AI call
+# at all — a genuine, meaningful speed win. Tradeoff, worth being explicit
+# about: this loses fine-grained personalization to the student's specific
+# interests/values (every student in the same major sees the same list),
+# unlike the AI-generated version. Majors NOT in this databank still fall
+# back to the full personalized AI generation below.
+# ----------------------------------------------------------------------------
+CAREER_DATABANK = {
+    "finance": [
+        {"title": "Financial Analyst", "why_it_fits": "Core path for finance majors", "salary_range": "$60k-$80k", "day_in_the_life": "Build models, analyze statements, support investment decisions", "how_to_get_there": "Apply to rotational analyst programs", "growth_outlook": "Stable, competitive"},
+        {"title": "Investment Banking Analyst", "why_it_fits": "Highest-paying direct finance track", "salary_range": "$95k-$150k+", "day_in_the_life": "Build pitch decks, model deals, long hours", "how_to_get_there": "Target recruiting at bulge-bracket banks", "growth_outlook": "Competitive, cyclical"},
+        {"title": "Corporate FP&A Analyst", "why_it_fits": "In-house finance, better hours than banking", "salary_range": "$65k-$90k", "day_in_the_life": "Build budgets, forecast revenue, present to leadership", "how_to_get_there": "Apply to FP&A rotational programs", "growth_outlook": "Stable"},
+        {"title": "Commercial Banking Analyst", "why_it_fits": "Relationship-driven finance track", "salary_range": "$60k-$85k", "day_in_the_life": "Underwrite loans, manage client relationships", "how_to_get_there": "Apply to regional bank credit programs", "growth_outlook": "Stable"},
+        {"title": "Equity Research Associate", "why_it_fits": "Analytical, markets-focused", "salary_range": "$75k-$110k", "day_in_the_life": "Research companies, write reports, build models", "how_to_get_there": "Network into a sell-side research team", "growth_outlook": "Competitive"},
+        {"title": "Wealth Management Advisor", "why_it_fits": "Client-facing, uncapped upside", "salary_range": "$55k-$90k+ (plus commission)", "day_in_the_life": "Manage client portfolios, build referral network", "how_to_get_there": "Get Series 7/66 licensed", "growth_outlook": "Growing"},
+        {"title": "Credit Analyst", "why_it_fits": "Risk-focused finance role", "salary_range": "$55k-$75k", "day_in_the_life": "Assess borrower risk, write credit memos", "how_to_get_there": "Apply to bank credit analyst programs", "growth_outlook": "Stable"},
+        {"title": "Treasury Analyst", "why_it_fits": "Cash and liquidity management", "salary_range": "$60k-$80k", "day_in_the_life": "Manage company cash, forecast liquidity needs", "how_to_get_there": "Apply to corporate treasury teams", "growth_outlook": "Stable"},
+        {"title": "Private Equity Analyst", "why_it_fits": "Highest-prestige buy-side track", "salary_range": "$100k-$150k+", "day_in_the_life": "Evaluate deals, build LBO models", "how_to_get_there": "Usually recruited from investment banking", "growth_outlook": "Very competitive"},
+        {"title": "Insurance Underwriter", "why_it_fits": "Stable, analytical, good work-life balance", "salary_range": "$55k-$75k", "day_in_the_life": "Assess risk, price policies", "how_to_get_there": "Apply directly to insurance carriers", "growth_outlook": "Stable"},
+        {"title": "Real Estate Analyst", "why_it_fits": "Tangible-asset finance track", "salary_range": "$60k-$85k", "day_in_the_life": "Underwrite deals, model property returns", "how_to_get_there": "Apply to REITs or real estate PE firms", "growth_outlook": "Growing"},
+        {"title": "Financial Planner", "why_it_fits": "Personal finance, client relationships", "salary_range": "$50k-$80k+ (plus fees)", "day_in_the_life": "Build financial plans for individual clients", "how_to_get_there": "Get CFP certification over time", "growth_outlook": "Growing"},
+        {"title": "Actuarial Analyst", "why_it_fits": "Highly analytical, strong work-life balance", "salary_range": "$65k-$85k", "day_in_the_life": "Model risk and pricing for insurers", "how_to_get_there": "Pass actuarial exams while working", "growth_outlook": "Growing steadily"},
+        {"title": "Corporate Development Analyst", "why_it_fits": "M&A-focused, in-house strategy", "salary_range": "$75k-$100k", "day_in_the_life": "Evaluate acquisition targets, model synergies", "how_to_get_there": "Often a step up from banking/consulting", "growth_outlook": "Competitive"},
+        {"title": "Risk Management Analyst", "why_it_fits": "Growing, in-demand specialty", "salary_range": "$65k-$90k", "day_in_the_life": "Model and monitor financial risk exposure", "how_to_get_there": "Apply to bank/corporate risk teams", "growth_outlook": "Growing"},
+    ],
+    "economics": [
+        {"title": "Economic Analyst", "why_it_fits": "Direct application of econ training", "salary_range": "$60k-$85k", "day_in_the_life": "Analyze economic data, write reports", "how_to_get_there": "Apply to consulting firms or government agencies", "growth_outlook": "Stable"},
+        {"title": "Policy Analyst", "why_it_fits": "Applies economics to real-world policy", "salary_range": "$55k-$80k", "day_in_the_life": "Research policy impact, brief decision-makers", "how_to_get_there": "Apply to think tanks or government roles", "growth_outlook": "Stable"},
+        {"title": "Management Consultant", "why_it_fits": "Popular econ-major destination", "salary_range": "$85k-$110k", "day_in_the_life": "Solve client business problems, travel frequently", "how_to_get_there": "Target consulting firm recruiting", "growth_outlook": "Competitive"},
+        {"title": "Data Analyst", "why_it_fits": "Quantitative econ skills transfer directly", "salary_range": "$60k-$85k", "day_in_the_life": "Clean data, build dashboards, find trends", "how_to_get_there": "Build a portfolio with SQL/Python projects", "growth_outlook": "Growing fast"},
+        {"title": "Market Research Analyst", "why_it_fits": "Applies economic reasoning to consumer behavior", "salary_range": "$55k-$75k", "day_in_the_life": "Design surveys, analyze market trends", "how_to_get_there": "Apply directly to research or marketing teams", "growth_outlook": "Stable"},
+        {"title": "Financial Analyst", "why_it_fits": "Common econ-to-finance crossover", "salary_range": "$60k-$80k", "day_in_the_life": "Build models, analyze statements", "how_to_get_there": "Apply to rotational analyst programs", "growth_outlook": "Stable"},
+        {"title": "Actuarial Analyst", "why_it_fits": "Quantitative, strong work-life balance", "salary_range": "$65k-$85k", "day_in_the_life": "Model risk and pricing for insurers", "how_to_get_there": "Pass actuarial exams while working", "growth_outlook": "Growing steadily"},
+        {"title": "Urban/Regional Planner", "why_it_fits": "Applies economics to city-level decisions", "salary_range": "$55k-$75k", "day_in_the_life": "Analyze zoning, transit, and growth data", "how_to_get_there": "Often pairs well with a planning master's", "growth_outlook": "Stable"},
+        {"title": "Supply Chain Analyst", "why_it_fits": "Economics of logistics and operations", "salary_range": "$60k-$80k", "day_in_the_life": "Optimize inventory and distribution decisions", "how_to_get_there": "Apply to retail/manufacturing analyst programs", "growth_outlook": "Growing"},
+        {"title": "Compensation Analyst", "why_it_fits": "Applies labor economics directly", "salary_range": "$55k-$75k", "day_in_the_life": "Benchmark pay, model compensation structures", "how_to_get_there": "Apply to corporate HR/total rewards teams", "growth_outlook": "Stable"},
+        {"title": "Underwriter", "why_it_fits": "Risk-pricing, analytical fit", "salary_range": "$55k-$75k", "day_in_the_life": "Assess risk, price policies or loans", "how_to_get_there": "Apply directly to insurers or lenders", "growth_outlook": "Stable"},
+        {"title": "International Trade Analyst", "why_it_fits": "Applies macro/trade theory directly", "salary_range": "$55k-$80k", "day_in_the_life": "Analyze tariffs, trade flows, compliance", "how_to_get_there": "Apply to trade-focused firms or government", "growth_outlook": "Stable"},
+        {"title": "Real Estate Analyst", "why_it_fits": "Applies micro/market analysis", "salary_range": "$60k-$85k", "day_in_the_life": "Underwrite deals, model property returns", "how_to_get_there": "Apply to REITs or brokerage firms", "growth_outlook": "Growing"},
+        {"title": "Economic Consultant", "why_it_fits": "Applies econ theory to litigation/business", "salary_range": "$65k-$95k", "day_in_the_life": "Build economic models for legal/business cases", "how_to_get_there": "Apply to economic consulting firms", "growth_outlook": "Stable"},
+        {"title": "Credit Risk Analyst", "why_it_fits": "Quantitative risk assessment", "salary_range": "$60k-$80k", "day_in_the_life": "Model borrower default risk", "how_to_get_there": "Apply to bank risk teams", "growth_outlook": "Growing"},
+    ],
+    "computer science": [
+        {"title": "Software Engineer", "why_it_fits": "Core CS career path", "salary_range": "$75k-$110k", "day_in_the_life": "Write, test, and ship production code", "how_to_get_there": "Build projects, grind interview prep", "growth_outlook": "Growing fast"},
+        {"title": "Data Engineer", "why_it_fits": "High-demand data infrastructure role", "salary_range": "$80k-$115k", "day_in_the_life": "Build pipelines that move and clean data", "how_to_get_there": "Learn SQL, Spark, cloud data tools", "growth_outlook": "Growing fast"},
+        {"title": "Machine Learning Engineer", "why_it_fits": "Highest-growth CS specialty right now", "salary_range": "$95k-$140k", "day_in_the_life": "Build and deploy ML models into production", "how_to_get_there": "Build ML projects, learn PyTorch/TensorFlow", "growth_outlook": "Growing very fast"},
+        {"title": "DevOps/Cloud Engineer", "why_it_fits": "Infrastructure-focused, in demand", "salary_range": "$85k-$120k", "day_in_the_life": "Manage deployment pipelines and cloud infra", "how_to_get_there": "Get AWS/Azure certifications", "growth_outlook": "Growing fast"},
+        {"title": "Security Engineer", "why_it_fits": "High-demand, well-compensated specialty", "salary_range": "$90k-$130k", "day_in_the_life": "Find and fix security vulnerabilities", "how_to_get_there": "Build a security-focused portfolio, get certs", "growth_outlook": "Growing very fast"},
+        {"title": "Mobile App Developer", "why_it_fits": "Consumer-facing CS specialty", "salary_range": "$75k-$105k", "day_in_the_life": "Build iOS/Android app features", "how_to_get_there": "Ship a real app to the App Store", "growth_outlook": "Stable, competitive"},
+        {"title": "Product Manager (Technical)", "why_it_fits": "For CS majors who like strategy over pure code", "salary_range": "$85k-$120k", "day_in_the_life": "Define product specs, work with engineers", "how_to_get_there": "Often a step from engineering after 2-3 years", "growth_outlook": "Competitive"},
+        {"title": "Game Developer", "why_it_fits": "For CS majors with a creative/gaming interest", "salary_range": "$65k-$95k", "day_in_the_life": "Build gameplay systems and engine features", "how_to_get_there": "Ship a portfolio game, apply to studios", "growth_outlook": "Stable, competitive"},
+        {"title": "Site Reliability Engineer", "why_it_fits": "Systems-focused, well-paid", "salary_range": "$90k-$130k", "day_in_the_life": "Keep production systems fast and reliable", "how_to_get_there": "Build strong systems/networking fundamentals", "growth_outlook": "Growing fast"},
+        {"title": "Data Scientist", "why_it_fits": "Blends CS with statistics", "salary_range": "$85k-$120k", "day_in_the_life": "Analyze data, build predictive models", "how_to_get_there": "Build a portfolio of real data projects", "growth_outlook": "Growing fast"},
+        {"title": "Full-Stack Developer", "why_it_fits": "Broad, flexible CS career path", "salary_range": "$70k-$105k", "day_in_the_life": "Build both frontend and backend features", "how_to_get_there": "Build and deploy full projects end-to-end", "growth_outlook": "Growing"},
+        {"title": "QA/Test Engineer", "why_it_fits": "Entry point into software with less grind", "salary_range": "$60k-$85k", "day_in_the_life": "Write automated tests, find bugs before users do", "how_to_get_there": "Learn test automation frameworks", "growth_outlook": "Stable"},
+        {"title": "Solutions Architect", "why_it_fits": "For CS majors who like client-facing work", "salary_range": "$90k-$130k", "day_in_the_life": "Design technical solutions for enterprise clients", "how_to_get_there": "Usually a step up after a few years engineering", "growth_outlook": "Growing"},
+        {"title": "Embedded Systems Engineer", "why_it_fits": "Hardware-adjacent CS specialty", "salary_range": "$75k-$105k", "day_in_the_life": "Write low-level code for physical devices", "how_to_get_there": "Build projects with microcontrollers", "growth_outlook": "Stable"},
+        {"title": "IT Consultant", "why_it_fits": "CS knowledge applied to business problems", "salary_range": "$70k-$100k", "day_in_the_life": "Advise companies on technology decisions", "how_to_get_there": "Apply to tech consulting firms", "growth_outlook": "Stable"},
+    ],
+    "psychology": [
+        {"title": "HR Generalist", "why_it_fits": "Applies people-focused psych training", "salary_range": "$50k-$70k", "day_in_the_life": "Handle hiring, employee relations, policy", "how_to_get_there": "Apply to corporate HR rotational programs", "growth_outlook": "Stable"},
+        {"title": "Market Research Analyst", "why_it_fits": "Applies behavioral insight to consumer data", "salary_range": "$55k-$75k", "day_in_the_life": "Design surveys, analyze consumer behavior", "how_to_get_there": "Apply directly to research or marketing teams", "growth_outlook": "Stable"},
+        {"title": "UX Researcher", "why_it_fits": "Directly applies psychology to product design", "salary_range": "$70k-$100k", "day_in_the_life": "Run user studies, translate findings into design", "how_to_get_there": "Build a portfolio of real research projects", "growth_outlook": "Growing"},
+        {"title": "School Counselor", "why_it_fits": "Direct psych-to-career path", "salary_range": "$50k-$65k", "day_in_the_life": "Support students academically and emotionally", "how_to_get_there": "Requires a master's in school counseling", "growth_outlook": "Stable"},
+        {"title": "Case Manager", "why_it_fits": "People-focused, helping-profession fit", "salary_range": "$40k-$55k", "day_in_the_life": "Connect clients with social services and support", "how_to_get_there": "Apply to social service agencies", "growth_outlook": "Growing"},
+        {"title": "Recruiter", "why_it_fits": "Reads people well, fast-paced", "salary_range": "$45k-$70k+ (plus commission)", "day_in_the_life": "Source, interview, and place candidates", "how_to_get_there": "Apply to staffing firms or corporate TA teams", "growth_outlook": "Stable"},
+        {"title": "Behavioral Analyst (ABA)", "why_it_fits": "Direct clinical application of psychology", "salary_range": "$45k-$65k", "day_in_the_life": "Work directly with clients on behavior plans", "how_to_get_there": "Get RBT certification, work toward BCBA", "growth_outlook": "Growing fast"},
+        {"title": "Training & Development Specialist", "why_it_fits": "Applies learning psychology in workplaces", "salary_range": "$50k-$70k", "day_in_the_life": "Design and deliver employee training", "how_to_get_there": "Apply to corporate L&D teams", "growth_outlook": "Stable"},
+        {"title": "Probation Officer", "why_it_fits": "Applies psych to behavior/rehabilitation", "salary_range": "$45k-$65k", "day_in_the_life": "Supervise and support people in the justice system", "how_to_get_there": "Apply to state/county probation departments", "growth_outlook": "Stable"},
+        {"title": "Sales Representative", "why_it_fits": "Understanding people drives sales success", "salary_range": "$45k-$70k+ (plus commission)", "day_in_the_life": "Build relationships, close deals", "how_to_get_there": "Apply to B2B sales development programs", "growth_outlook": "Stable"},
+        {"title": "Social Media Strategist", "why_it_fits": "Applies behavioral insight to content/audience", "salary_range": "$45k-$65k", "day_in_the_life": "Plan content, analyze audience engagement", "how_to_get_there": "Build a portfolio managing real accounts", "growth_outlook": "Growing"},
+        {"title": "Nonprofit Program Coordinator", "why_it_fits": "Mission-driven, people-centered work", "salary_range": "$40k-$55k", "day_in_the_life": "Run programs that serve a community need", "how_to_get_there": "Apply directly to nonprofits", "growth_outlook": "Stable"},
+        {"title": "Psychiatric Technician", "why_it_fits": "Direct clinical exposure without a grad degree yet", "salary_range": "$35k-$50k", "day_in_the_life": "Support patients in psychiatric care settings", "how_to_get_there": "Apply to hospitals/treatment centers", "growth_outlook": "Growing"},
+        {"title": "User Experience (UX) Designer", "why_it_fits": "Psych insight applied to interface design", "salary_range": "$65k-$95k", "day_in_the_life": "Design interfaces informed by how people think", "how_to_get_there": "Build a design portfolio, learn Figma", "growth_outlook": "Growing"},
+        {"title": "Compliance/Ethics Analyst", "why_it_fits": "Understanding behavior applied to policy", "salary_range": "$55k-$75k", "day_in_the_life": "Monitor and support ethical workplace practices", "how_to_get_there": "Apply to corporate compliance teams", "growth_outlook": "Stable"},
+    ],
+}
+
+
+def normalize_major(name: str) -> str:
+    """Match a free-text major name to a databank key — handles common
+    real-world variations (abbreviations, 'and' vs '&', extra words)."""
+    n = (name or "").lower().strip()
+    aliases = {
+        "cs": "computer science", "comp sci": "computer science", "computer sci": "computer science",
+        "econ": "economics", "fin": "finance",
+        "psych": "psychology",
+    }
+    n = aliases.get(n, n)
+    for key in CAREER_DATABANK:
+        if key in n or n in key:
+            return key
+    return n
+
+
 CAREERS_SCHEMA = """Respond ONLY with valid JSON, no markdown:
 {
   "careers": [
     {
       "title": "Job title",
-      "why_it_fits": "One honest sentence connecting this to their specific interests/values/major",
-      "salary_range": "$X-$Y, realistic entry-level to a few years in",
-      "day_in_the_life": "One or two sentences, concrete and specific, not generic",
-      "how_to_get_there": "One sentence — from their current position, what's the realistic first step",
-      "growth_outlook": "One short phrase on demand/growth for this role"
+      "why_it_fits": "Max 12 words connecting this to their specific interests/values/major",
+      "salary_range": "$X-$Y, entry-level",
+      "day_in_the_life": "Max 15 words, concrete and specific, not generic",
+      "how_to_get_there": "Max 12 words — the realistic first step from where they are now",
+      "growth_outlook": "2-4 words on demand/growth, e.g. 'Growing fast' or 'Stable, competitive'"
     }
   ]
 }
@@ -746,9 +931,10 @@ Generate exactly 18 careers. They should span a real range — some closely tied
 current/likely major, some more exploratory based on interests they mentioned, some that
 connect two interests together in a way they may not have considered. Vary salary ranges
 honestly — not everything should be high-paying. No duplicates. No generic filler titles.
-CRITICAL: never use a double-quote character (") inside any string value — it breaks JSON
-parsing. Use single quotes ('like this') if you need to quote a phrase, or better, just
-rephrase to avoid quoting at all."""
+Every field is a FRAGMENT, not a full sentence — short, scannable, no filler words like
+"this role" or "in this field". CRITICAL: never use a double-quote character (") inside any
+string value — it breaks JSON parsing. Use single quotes ('like this') if you need to quote
+a phrase, or better, just rephrase to avoid quoting at all."""
 
 
 def _validate_careers(parsed: dict) -> tuple[bool, str]:
@@ -759,6 +945,15 @@ def _validate_careers(parsed: dict) -> tuple[bool, str]:
 
 
 async def generate_careers(answers: dict, unl: bool) -> dict:
+    # Instant, zero-AI-call path for common majors — a real speed win, with
+    # an honest tradeoff: this list isn't personalized to THIS student's
+    # specific interests/values the way the AI-generated version is, since
+    # it's the same curated list for every student in that major. Still 18
+    # real, well-reasoned careers either way.
+    databank_key = normalize_major(answers.get("major", ""))
+    if databank_key in CAREER_DATABANK:
+        return {"careers": CAREER_DATABANK[databank_key], "_source": "databank"}
+
     unl_block = (
         "This is a University of Nebraska-Lincoln student — where relevant, mention real "
         "UNL resources like the Business Career Center or Explore Center as a next step."
@@ -779,7 +974,9 @@ Student:
 
 {CAREERS_SCHEMA}"""
 
-    return await call_ai_with_retry(prompt, _validate_careers, max_tokens=6000)
+    result = await call_ai_with_retry(prompt, _validate_careers, max_tokens=6000)
+    result["_source"] = "ai"
+    return result
 
 
 # ----------------------------------------------------------------------------
@@ -794,14 +991,15 @@ MAJORS_LIST_SCHEMA = """Respond ONLY with valid JSON, no markdown:
     {
       "name": "Major name",
       "fit_percentage": 82,
-      "one_liner": "One honest sentence on why this fits their specific interests/values",
-      "salary_range": "$X-$Y, realistic entry-level"
+      "one_liner": "Max 12 words on why this fits their specific interests/values",
+      "salary_range": "$X-$Y, entry-level"
     }
   ]
 }
 Generate exactly 10 majors, ranked by fit_percentage descending. Include their current major
 if it genuinely belongs in a top-10 fit list — don't force it in artificially if it doesn't.
 Vary fit_percentage honestly (not all 80+). No duplicates. No generic filler names.
+one_liner is a FRAGMENT, not a full sentence — short and scannable.
 CRITICAL: never use a double-quote character (") inside any string value — use single quotes
 ('like this') instead, or rephrase to avoid quoting entirely."""
 
@@ -809,12 +1007,12 @@ MAJOR_SEARCH_SCHEMA = """Respond ONLY with valid JSON, no markdown:
 {
   "name": "the exact major name searched for",
   "fit_percentage": 68,
-  "one_liner": "One honest sentence on why this does or doesn't fit their specific interests/values",
-  "salary_range": "$X-$Y, realistic entry-level"
+  "one_liner": "Max 15 words on why this does or doesn't fit their specific interests/values",
+  "salary_range": "$X-$Y, entry-level"
 }
 Be honest — if this major is a poor fit for their stated interests/values, say so plainly and
-give an honest, lower fit_percentage rather than padding it. CRITICAL: never use a double-quote
-character (") inside any string value."""
+give an honest, lower fit_percentage rather than padding it. one_liner is short and scannable,
+not a full paragraph. CRITICAL: never use a double-quote character (") inside any string value."""
 
 
 def _validate_majors_list(parsed: dict) -> tuple[bool, str]:
@@ -874,7 +1072,78 @@ Student:
 
     return await call_ai_with_retry(prompt, _validate_major_search, max_tokens=800)
 
+
 # ----------------------------------------------------------------------------
+# Sample schedule — a concrete, illustrative "here's what your next semesters
+# could look like" for a specific major, built from the credits/time already
+# computed for that path. Deliberately does NOT include professors, rooms, or
+# specific sections — those change every term and aren't something this app
+# can reliably know. Just course identifiers (e.g. "FINA 363"), clearly
+# framed as a sample sequence, not a guaranteed real schedule.
+# ----------------------------------------------------------------------------
+SCHEDULE_SCHEMA = """Respond ONLY with valid JSON, no markdown:
+{
+  "terms": [
+    {
+      "term_label": "Semester 1",
+      "courses": ["FINA 363", "ECON 212", "MGMT 200", "General Elective"]
+    }
+  ]
+}
+Each term should have 4-5 courses (a realistic full-time course load). Use REAL course
+identifiers where you know them for this school/major (e.g. "FINA 363" not "Finance Course 1"),
+falling back to a realistic-sounding placeholder only when genuinely uncertain of the exact
+code. Sequence courses sensibly — prerequisites and intro courses before advanced ones.
+This is a SAMPLE/illustrative plan, not a guaranteed real schedule (real course offerings and
+availability vary by term) — do not include professor names, room numbers, or specific
+sections; just course identifiers. CRITICAL: never use a double-quote character (") inside
+any string value."""
+
+
+def _validate_schedule(parsed: dict) -> tuple[bool, str]:
+    terms = parsed.get("terms", [])
+    if not terms or not isinstance(terms, list):
+        return False, "Missing or empty terms in schedule"
+    if any(not t.get("courses") for t in terms):
+        return False, "A term has no courses listed"
+    return True, ""
+
+
+async def generate_schedule(answers: dict, target_major: str, additional_credits_needed,
+                             catalog: dict, unl: bool) -> dict:
+    # Roughly how many terms this needs: ~15 credits/term is a typical
+    # full-time pace. Always at least 1 term so there's something to show.
+    try:
+        credits = float(additional_credits_needed) if additional_credits_needed is not None else 30
+    except (TypeError, ValueError):
+        credits = 30
+    n_terms = max(1, min(8, round(credits / 15) or 1))
+
+    catalog_block = (
+        f"\nVERIFIED CATALOG DATA — ground real course codes in this:\n{catalog['content']}\n"
+        if catalog.get("content") else ""
+    )
+    unl_block = (
+        "This is a University of Nebraska-Lincoln student — use real UNL course codes "
+        "where you know them (e.g. FINA 361, ECON 212, CSCE 156)." if unl else ""
+    )
+
+    prompt = f"""You are MajorMove's schedule simulator. Build a SAMPLE, illustrative
+term-by-term course sequence for a student switching to {target_major}.
+
+Student:
+- School: {answers.get('school')}
+- Current year: {answers.get('year')}
+- Target major: {target_major}
+- Approximate additional credits needed: {credits}
+- Build approximately {n_terms} term(s) of courses to cover that
+{catalog_block}{unl_block}
+
+{SCHEDULE_SCHEMA}"""
+
+    return await call_ai_with_retry(prompt, _validate_schedule, max_tokens=1500)
+
+
 # Analytics
 # ----------------------------------------------------------------------------
 def log_event(name: str, anon_id: str = None, user_id: int = None, props: dict = None, school: str = None):
@@ -1131,6 +1400,33 @@ async def majors_search(
               props={"searched": search_major})
 
     return await generate_major_search(answers, search_major.strip(), is_unl(school))
+
+
+@app.post("/schedule")
+async def schedule(
+    school: str = Form(...),
+    year: str = Form(...),
+    target_major: str = Form(...),
+    additional_credits_needed: str = Form("30"),
+    anon_id: str = Form(None),
+    user: Optional[dict] = Depends(current_user),
+):
+    """A sample, illustrative term-by-term course sequence for a specific
+    major — the concrete 'here's what it could actually look like' view.
+    Lightweight: no transcript images, reuses catalog data already cached
+    for this school/major if available."""
+    answers = {"school": school, "year": year}
+    catalog = await fetch_catalog(school, target_major)
+    log_event("schedule_started", anon_id=anon_id,
+              user_id=user["id"] if user else None, school=school,
+              props={"target_major": target_major})
+
+    result = await generate_schedule(answers, target_major, additional_credits_needed,
+                                      catalog, is_unl(school))
+    log_event("schedule_completed", anon_id=anon_id,
+              user_id=user["id"] if user else None, school=school,
+              props={"target_major": target_major, "term_count": len(result.get("terms", []))})
+    return result
 
 
 @app.get("/me/roadmaps")
