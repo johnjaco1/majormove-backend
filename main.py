@@ -895,6 +895,91 @@ CAREER_DATABANK = {
         {"title": "User Experience (UX) Designer", "why_it_fits": "Psych insight applied to interface design", "salary_range": "$65k-$95k", "day_in_the_life": "Design interfaces informed by how people think", "how_to_get_there": "Build a design portfolio, learn Figma", "growth_outlook": "Growing"},
         {"title": "Compliance/Ethics Analyst", "why_it_fits": "Understanding behavior applied to policy", "salary_range": "$55k-$75k", "day_in_the_life": "Monitor and support ethical workplace practices", "how_to_get_there": "Apply to corporate compliance teams", "growth_outlook": "Stable"},
     ],
+    "nursing": [
+        {"title": "Registered Nurse", "why_it_fits": "The core, direct nursing career path", "salary_range": "$65k-$85k", "day_in_the_life": "Assess patients, administer care, coordinate with doctors", "how_to_get_there": "Pass the NCLEX after graduation", "growth_outlook": "Growing fast"},
+        {"title": "ICU/Critical Care Nurse", "why_it_fits": "Higher-acuity specialty for confident RNs", "salary_range": "$70k-$95k", "day_in_the_life": "Monitor critically ill patients, manage complex cases", "how_to_get_there": "Gain 1-2 years RN experience first", "growth_outlook": "Growing"},
+        {"title": "Emergency Room Nurse", "why_it_fits": "Fast-paced, high-variety nursing specialty", "salary_range": "$65k-$90k", "day_in_the_life": "Triage and treat urgent, unpredictable cases", "how_to_get_there": "Apply directly to ER departments", "growth_outlook": "Growing"},
+        {"title": "Pediatric Nurse", "why_it_fits": "For nurses drawn to working with children", "salary_range": "$60k-$80k", "day_in_the_life": "Care for infants through teens in clinical settings", "how_to_get_there": "Seek pediatric unit placements", "growth_outlook": "Stable"},
+        {"title": "Nurse Case Manager", "why_it_fits": "Less bedside, more care coordination", "salary_range": "$65k-$85k", "day_in_the_life": "Coordinate patient care across providers and insurers", "how_to_get_there": "Move into case management after RN experience", "growth_outlook": "Stable"},
+        {"title": "Public Health Nurse", "why_it_fits": "Community-level rather than bedside care", "salary_range": "$55k-$75k", "day_in_the_life": "Run community health programs and screenings", "how_to_get_there": "Apply to public health departments", "growth_outlook": "Growing"},
+        {"title": "Operating Room Nurse", "why_it_fits": "Precision-focused surgical specialty", "salary_range": "$70k-$95k", "day_in_the_life": "Assist surgeons, manage sterile procedures", "how_to_get_there": "Seek perioperative training programs", "growth_outlook": "Stable"},
+        {"title": "Oncology Nurse", "why_it_fits": "Specialized, relationship-driven cancer care", "salary_range": "$65k-$90k", "day_in_the_life": "Administer treatment, support patients long-term", "how_to_get_there": "Gain oncology certification after RN licensure", "growth_outlook": "Growing"},
+        {"title": "Psychiatric Nurse", "why_it_fits": "For nurses drawn to mental health care", "salary_range": "$65k-$85k", "day_in_the_life": "Support patients through mental health treatment", "how_to_get_there": "Seek psychiatric unit placements", "growth_outlook": "Growing"},
+        {"title": "Home Health Nurse", "why_it_fits": "More autonomy, one-on-one patient care", "salary_range": "$60k-$80k", "day_in_the_life": "Provide in-home care to recovering or chronic patients", "how_to_get_there": "Apply to home health agencies", "growth_outlook": "Growing fast"},
+        {"title": "School Nurse", "why_it_fits": "Predictable schedule, community-based care", "salary_range": "$50k-$65k", "day_in_the_life": "Manage student health needs during the school day", "how_to_get_there": "Apply directly to school districts", "growth_outlook": "Stable"},
+        {"title": "Clinical Research Nurse", "why_it_fits": "Blends nursing with clinical trial work", "salary_range": "$65k-$90k", "day_in_the_life": "Monitor patients enrolled in clinical trials", "how_to_get_there": "Apply to hospital or pharma research teams", "growth_outlook": "Growing"},
+        {"title": "Nurse Educator", "why_it_fits": "For RNs who want to teach the next generation", "salary_range": "$65k-$85k", "day_in_the_life": "Teach nursing students in classroom and clinical settings", "how_to_get_there": "Often requires a graduate nursing degree", "growth_outlook": "Growing"},
+        {"title": "Travel Nurse", "why_it_fits": "Higher pay in exchange for short-term relocations", "salary_range": "$80k-$120k", "day_in_the_life": "Work short-term contracts at hospitals nationwide", "how_to_get_there": "Gain 1-2 years experience, then join a travel agency", "growth_outlook": "Growing"},
+        {"title": "Nurse Practitioner", "why_it_fits": "Highest-autonomy nursing path, needs more schooling", "salary_range": "$95k-$125k", "day_in_the_life": "Diagnose and treat patients with prescribing authority", "how_to_get_there": "Requires an MSN or DNP after your RN", "growth_outlook": "Growing very fast"},
+    ],
+    "marketing": [
+        {"title": "Marketing Coordinator", "why_it_fits": "The standard entry point into marketing", "salary_range": "$45k-$60k", "day_in_the_life": "Support campaigns, manage timelines and assets", "how_to_get_there": "Apply to marketing coordinator/associate roles", "growth_outlook": "Stable"},
+        {"title": "Social Media Manager", "why_it_fits": "Direct, visible application of marketing skills", "salary_range": "$45k-$65k", "day_in_the_life": "Plan content, engage audiences, track engagement", "how_to_get_there": "Build a portfolio managing real accounts", "growth_outlook": "Growing"},
+        {"title": "Digital Marketing Specialist", "why_it_fits": "High-demand, data-adjacent marketing track", "salary_range": "$50k-$70k", "day_in_the_life": "Run paid campaigns, track conversion metrics", "how_to_get_there": "Learn Google Ads and analytics tools", "growth_outlook": "Growing fast"},
+        {"title": "Market Research Analyst", "why_it_fits": "For marketing students who like the data side", "salary_range": "$50k-$70k", "day_in_the_life": "Design surveys, analyze consumer trends", "how_to_get_there": "Apply directly to research or brand teams", "growth_outlook": "Stable"},
+        {"title": "Brand Manager", "why_it_fits": "A common mid-career marketing destination", "salary_range": "$60k-$85k", "day_in_the_life": "Own a brand's positioning and campaign strategy", "how_to_get_there": "Usually a step up after 2-3 years in marketing", "growth_outlook": "Stable"},
+        {"title": "Content Marketing Manager", "why_it_fits": "For marketers who like writing and storytelling", "salary_range": "$55k-$75k", "day_in_the_life": "Plan and produce content across channels", "how_to_get_there": "Build a portfolio of real content work", "growth_outlook": "Growing"},
+        {"title": "Public Relations Specialist", "why_it_fits": "Closely adjacent to marketing, more media-facing", "salary_range": "$45k-$65k", "day_in_the_life": "Manage media relationships and brand reputation", "how_to_get_there": "Apply to PR agencies or in-house comms teams", "growth_outlook": "Stable"},
+        {"title": "SEO/SEM Specialist", "why_it_fits": "A technical, high-demand marketing specialty", "salary_range": "$50k-$70k", "day_in_the_life": "Optimize content and ads for search visibility", "how_to_get_there": "Learn SEO tools and Google Ads certification", "growth_outlook": "Growing fast"},
+        {"title": "Product Marketing Manager", "why_it_fits": "Blends marketing with product strategy", "salary_range": "$65k-$90k", "day_in_the_life": "Position products, enable sales teams", "how_to_get_there": "Often a step up from marketing or PM roles", "growth_outlook": "Growing"},
+        {"title": "Marketing Analytics Manager", "why_it_fits": "For marketers who lean quantitative", "salary_range": "$60k-$85k", "day_in_the_life": "Measure campaign ROI, build reporting dashboards", "how_to_get_there": "Build strong Excel/SQL skills alongside marketing", "growth_outlook": "Growing"},
+        {"title": "Advertising Account Executive", "why_it_fits": "Client-facing marketing/agency track", "salary_range": "$50k-$70k", "day_in_the_life": "Manage client campaigns and relationships", "how_to_get_there": "Apply to advertising agencies", "growth_outlook": "Stable"},
+        {"title": "E-commerce Marketing Manager", "why_it_fits": "High-growth, retail-focused marketing specialty", "salary_range": "$55k-$80k", "day_in_the_life": "Drive online sales through campaigns and promotions", "how_to_get_there": "Apply to retail or DTC brand marketing teams", "growth_outlook": "Growing fast"},
+        {"title": "Growth Marketing Manager", "why_it_fits": "For marketers who like experimentation and data", "salary_range": "$65k-$95k", "day_in_the_life": "Run rapid tests to drive user acquisition", "how_to_get_there": "Build a track record of measurable campaign wins", "growth_outlook": "Growing fast"},
+        {"title": "Email Marketing Specialist", "why_it_fits": "A focused, measurable marketing channel", "salary_range": "$45k-$65k", "day_in_the_life": "Build campaigns, segment audiences, test messaging", "how_to_get_there": "Learn a major email platform like Klaviyo or HubSpot", "growth_outlook": "Stable"},
+        {"title": "Influencer/Partnerships Manager", "why_it_fits": "For marketers drawn to relationship building", "salary_range": "$50k-$70k", "day_in_the_life": "Recruit and manage brand partnerships", "how_to_get_there": "Build relationships in a specific industry niche", "growth_outlook": "Growing"},
+    ],
+    "biology": [
+        {"title": "Lab Technician", "why_it_fits": "The most common entry-level biology role", "salary_range": "$40k-$55k", "day_in_the_life": "Run samples, maintain lab equipment, log results", "how_to_get_there": "Apply directly to university or company labs", "growth_outlook": "Stable"},
+        {"title": "Research Assistant", "why_it_fits": "Direct extension of undergraduate lab work", "salary_range": "$38k-$52k", "day_in_the_life": "Support faculty or industry research projects", "how_to_get_there": "Build relationships with professors during school", "growth_outlook": "Stable"},
+        {"title": "Clinical Research Coordinator", "why_it_fits": "Applies biology to real clinical trials", "salary_range": "$48k-$65k", "day_in_the_life": "Manage trial logistics and patient enrollment", "how_to_get_there": "Apply to hospital or pharma research teams", "growth_outlook": "Growing"},
+        {"title": "Environmental Scientist", "why_it_fits": "For biology majors drawn to ecology/conservation", "salary_range": "$50k-$70k", "day_in_the_life": "Collect field data, assess environmental impact", "how_to_get_there": "Apply to environmental consulting or government roles", "growth_outlook": "Growing"},
+        {"title": "Biotech Quality Control Analyst", "why_it_fits": "Applies lab skills in a manufacturing setting", "salary_range": "$50k-$68k", "day_in_the_life": "Test products against safety and quality standards", "how_to_get_there": "Apply to biotech or pharma manufacturing", "growth_outlook": "Growing"},
+        {"title": "Pharmaceutical Sales Representative", "why_it_fits": "For biology majors who like people over the bench", "salary_range": "$55k-$80k", "day_in_the_life": "Educate providers on pharmaceutical products", "how_to_get_there": "Apply directly to pharma sales teams", "growth_outlook": "Stable"},
+        {"title": "Science Teacher", "why_it_fits": "A stable, direct application of a biology degree", "salary_range": "$42k-$60k", "day_in_the_life": "Teach biology or general science to students", "how_to_get_there": "May require a teaching certification", "growth_outlook": "Stable"},
+        {"title": "Wildlife Biologist", "why_it_fits": "For biology majors drawn to field work", "salary_range": "$42k-$60k", "day_in_the_life": "Study animal populations and habitats in the field", "how_to_get_there": "Apply to state wildlife agencies or nonprofits", "growth_outlook": "Stable"},
+        {"title": "Food Scientist", "why_it_fits": "Applies biology/chemistry to food production", "salary_range": "$50k-$70k", "day_in_the_life": "Test and develop food products for safety and quality", "how_to_get_there": "Apply to food manufacturing companies", "growth_outlook": "Growing"},
+        {"title": "Genetic Counseling Assistant", "why_it_fits": "A stepping stone into genetics-focused healthcare", "salary_range": "$45k-$60k", "day_in_the_life": "Support genetic counselors with patient case prep", "how_to_get_there": "Apply to hospital genetics departments", "growth_outlook": "Growing"},
+        {"title": "Forensic Science Technician", "why_it_fits": "Applies lab skills to criminal investigations", "salary_range": "$48k-$65k", "day_in_the_life": "Analyze evidence samples for law enforcement", "how_to_get_there": "Apply to crime labs or law enforcement agencies", "growth_outlook": "Growing"},
+        {"title": "Public Health Analyst", "why_it_fits": "Applies biology to population-level health data", "salary_range": "$48k-$68k", "day_in_the_life": "Analyze health trends and program outcomes", "how_to_get_there": "Apply to public health departments or nonprofits", "growth_outlook": "Growing"},
+        {"title": "Science Writer", "why_it_fits": "For biology majors who like communicating science", "salary_range": "$45k-$65k", "day_in_the_life": "Translate research into articles for broader audiences", "how_to_get_there": "Build a portfolio of science writing samples", "growth_outlook": "Stable"},
+        {"title": "Biology Lab Manager", "why_it_fits": "A step up from lab technician with more ownership", "salary_range": "$50k-$70k", "day_in_the_life": "Oversee lab operations, supplies, and staff", "how_to_get_there": "Usually follows a few years as a lab technician", "growth_outlook": "Stable"},
+        {"title": "Medical Sales Representative", "why_it_fits": "For biology majors who like sales over research", "salary_range": "$60k-$90k", "day_in_the_life": "Sell medical devices or products to providers", "how_to_get_there": "Apply directly to medical device companies", "growth_outlook": "Growing"},
+    ],
+    "engineering": [
+        {"title": "Mechanical Engineer", "why_it_fits": "One of the most common engineering career paths", "salary_range": "$65k-$85k", "day_in_the_life": "Design and test mechanical systems and components", "how_to_get_there": "Apply to engineering rotational programs", "growth_outlook": "Stable"},
+        {"title": "Civil Engineer", "why_it_fits": "For engineers drawn to infrastructure and construction", "salary_range": "$60k-$80k", "day_in_the_life": "Design and oversee infrastructure projects", "how_to_get_there": "Apply to civil/construction engineering firms", "growth_outlook": "Stable"},
+        {"title": "Electrical Engineer", "why_it_fits": "For engineers drawn to circuits and power systems", "salary_range": "$65k-$90k", "day_in_the_life": "Design and test electrical systems and components", "how_to_get_there": "Apply to electrical engineering teams", "growth_outlook": "Growing"},
+        {"title": "Manufacturing/Process Engineer", "why_it_fits": "Applies engineering to production efficiency", "salary_range": "$65k-$85k", "day_in_the_life": "Optimize production lines and processes", "how_to_get_there": "Apply to manufacturing companies directly", "growth_outlook": "Stable"},
+        {"title": "Quality Engineer", "why_it_fits": "For engineers who like process and standards work", "salary_range": "$60k-$80k", "day_in_the_life": "Ensure products meet quality and safety standards", "how_to_get_there": "Apply to manufacturing or industrial companies", "growth_outlook": "Stable"},
+        {"title": "Project Engineer", "why_it_fits": "Blends technical work with project coordination", "salary_range": "$60k-$85k", "day_in_the_life": "Coordinate timelines, budgets, and technical teams", "how_to_get_there": "Often a step up after a few years as an engineer", "growth_outlook": "Stable"},
+        {"title": "Systems Engineer", "why_it_fits": "For engineers who like big-picture technical design", "salary_range": "$70k-$95k", "day_in_the_life": "Design how complex systems and components interact", "how_to_get_there": "Apply to systems engineering teams", "growth_outlook": "Growing"},
+        {"title": "Design Engineer", "why_it_fits": "Hands-on technical design and prototyping work", "salary_range": "$65k-$85k", "day_in_the_life": "Design and prototype new products or components", "how_to_get_there": "Build a portfolio of real design projects", "growth_outlook": "Stable"},
+        {"title": "Structural Engineer", "why_it_fits": "A specialized civil engineering track", "salary_range": "$62k-$85k", "day_in_the_life": "Analyze and design load-bearing structures", "how_to_get_there": "Often requires PE licensure over time", "growth_outlook": "Stable"},
+        {"title": "Sales Engineer", "why_it_fits": "For engineers who like people over the bench", "salary_range": "$65k-$95k", "day_in_the_life": "Explain technical products to prospective clients", "how_to_get_there": "Apply to technical sales teams", "growth_outlook": "Growing"},
+        {"title": "Environmental Engineer", "why_it_fits": "Applies engineering to sustainability challenges", "salary_range": "$60k-$80k", "day_in_the_life": "Design systems to reduce environmental impact", "how_to_get_there": "Apply to environmental engineering firms", "growth_outlook": "Growing"},
+        {"title": "Robotics Engineer", "why_it_fits": "For engineers drawn to automation and robotics", "salary_range": "$70k-$100k", "day_in_the_life": "Design and program robotic systems", "how_to_get_there": "Build robotics projects during school", "growth_outlook": "Growing fast"},
+        {"title": "R&D Engineer", "why_it_fits": "For engineers who like inventing new solutions", "salary_range": "$70k-$95k", "day_in_the_life": "Prototype and test new product concepts", "how_to_get_there": "Apply to company R&D departments", "growth_outlook": "Growing"},
+        {"title": "Field Engineer", "why_it_fits": "For engineers who prefer on-site over office work", "salary_range": "$60k-$85k", "day_in_the_life": "Install, test, and troubleshoot equipment on-site", "how_to_get_there": "Apply to field service engineering roles", "growth_outlook": "Stable"},
+        {"title": "Engineering Project Manager", "why_it_fits": "A management path leveraging technical background", "salary_range": "$75k-$100k", "day_in_the_life": "Lead cross-functional engineering project teams", "how_to_get_there": "Usually a step up after several years engineering", "growth_outlook": "Growing"},
+    ],
+    "communication": [
+        {"title": "Public Relations Specialist", "why_it_fits": "A core, direct application of communication skills", "salary_range": "$45k-$65k", "day_in_the_life": "Manage media relationships and brand reputation", "how_to_get_there": "Apply to PR agencies or in-house comms teams", "growth_outlook": "Stable"},
+        {"title": "Social Media Manager", "why_it_fits": "Direct, visible application of communication skills", "salary_range": "$45k-$65k", "day_in_the_life": "Plan content, engage audiences, track engagement", "how_to_get_there": "Build a portfolio managing real accounts", "growth_outlook": "Growing"},
+        {"title": "Communications Coordinator", "why_it_fits": "The standard entry point into comms roles", "salary_range": "$42k-$60k", "day_in_the_life": "Draft internal and external messaging", "how_to_get_there": "Apply to corporate or nonprofit comms teams", "growth_outlook": "Stable"},
+        {"title": "Content Creator/Writer", "why_it_fits": "For communication majors who like writing", "salary_range": "$42k-$62k", "day_in_the_life": "Write and produce content across platforms", "how_to_get_there": "Build a portfolio of published writing samples", "growth_outlook": "Growing"},
+        {"title": "Corporate Communications Specialist", "why_it_fits": "Applies comms skills inside a company", "salary_range": "$50k-$70k", "day_in_the_life": "Manage internal messaging and executive communications", "how_to_get_there": "Apply to corporate communications teams", "growth_outlook": "Stable"},
+        {"title": "Marketing Coordinator", "why_it_fits": "Closely adjacent field, heavy skill overlap", "salary_range": "$45k-$60k", "day_in_the_life": "Support campaigns, manage timelines and assets", "how_to_get_there": "Apply to marketing coordinator roles", "growth_outlook": "Stable"},
+        {"title": "Event Coordinator", "why_it_fits": "For communication majors who like live events", "salary_range": "$42k-$58k", "day_in_the_life": "Plan and execute corporate or public events", "how_to_get_there": "Apply to event planning agencies or in-house teams", "growth_outlook": "Stable"},
+        {"title": "Broadcast/Media Producer", "why_it_fits": "For comm majors drawn to video/audio production", "salary_range": "$45k-$65k", "day_in_the_life": "Produce segments for broadcast or digital media", "how_to_get_there": "Build a demo reel during school", "growth_outlook": "Stable"},
+        {"title": "Human Resources Coordinator", "why_it_fits": "Applies communication skills to people operations", "salary_range": "$45k-$62k", "day_in_the_life": "Support hiring, onboarding, and employee communication", "how_to_get_there": "Apply to corporate HR teams", "growth_outlook": "Stable"},
+        {"title": "Journalist/Reporter", "why_it_fits": "For comm majors most drawn to reporting", "salary_range": "$38k-$55k", "day_in_the_life": "Research, write, and publish news stories", "how_to_get_there": "Build clips through a student paper or internship", "growth_outlook": "Stable"},
+        {"title": "Media Relations Specialist", "why_it_fits": "A specialized, press-facing communication role", "salary_range": "$48k-$68k", "day_in_the_life": "Pitch stories and manage press inquiries", "how_to_get_there": "Apply to PR agencies or press offices", "growth_outlook": "Stable"},
+        {"title": "Internal Communications Manager", "why_it_fits": "A mid-career comms specialty inside companies", "salary_range": "$55k-$75k", "day_in_the_life": "Manage employee-facing messaging and culture comms", "how_to_get_there": "Usually a step up after a few years in comms", "growth_outlook": "Growing"},
+        {"title": "Nonprofit Communications Manager", "why_it_fits": "For comm majors drawn to mission-driven work", "salary_range": "$42k-$60k", "day_in_the_life": "Manage messaging and outreach for a cause", "how_to_get_there": "Apply directly to nonprofit organizations", "growth_outlook": "Stable"},
+        {"title": "Digital Content Strategist", "why_it_fits": "Blends comms with digital/data thinking", "salary_range": "$50k-$70k", "day_in_the_life": "Plan content strategy across digital channels", "how_to_get_there": "Build a portfolio of measurable content work", "growth_outlook": "Growing"},
+        {"title": "Speechwriter", "why_it_fits": "A specialized, high-skill writing niche", "salary_range": "$50k-$72k", "day_in_the_life": "Write speeches and talking points for executives", "how_to_get_there": "Build a strong persuasive writing portfolio", "growth_outlook": "Stable"},
+    ],
 }
 
 
@@ -912,6 +997,107 @@ def normalize_major(name: str) -> str:
         if key in n or n in key:
             return key
     return n
+
+
+# ----------------------------------------------------------------------------
+# Common switches databank — the most genuinely common, well-known switch
+# destinations from a given major, based on real adjacent-field/coursework
+# overlap patterns, not a personalized-to-you AI guess. Static and instant:
+# zero AI call for the browse list itself, which is what actually caused the
+# wait when clicking through several of the 10 in a row.
+# ----------------------------------------------------------------------------
+COMMON_SWITCHES = {
+    "finance": [
+        {"name": "Economics", "fit_percentage": 88, "one_liner": "Heaviest course overlap of any switch from Finance", "salary_range": "$60k-$85k"},
+        {"name": "Management Information Systems", "fit_percentage": 82, "one_liner": "Same business core, adds real tech/data skills", "salary_range": "$65k-$95k"},
+        {"name": "Accounting", "fit_percentage": 80, "one_liner": "Shares core business courses, more structured career path", "salary_range": "$55k-$75k"},
+        {"name": "Business Analytics", "fit_percentage": 78, "one_liner": "Keeps the quant edge, adds data/coding skills", "salary_range": "$65k-$90k"},
+        {"name": "Marketing", "fit_percentage": 68, "one_liner": "Same college, much more creative/people-facing", "salary_range": "$50k-$70k"},
+        {"name": "Actuarial Science", "fit_percentage": 65, "one_liner": "For the most quantitatively inclined Finance students", "salary_range": "$65k-$85k"},
+        {"name": "Real Estate", "fit_percentage": 62, "one_liner": "A specialized, less crowded finance-adjacent path", "salary_range": "$55k-$80k"},
+        {"name": "International Business", "fit_percentage": 58, "one_liner": "For students drawn to global markets specifically", "salary_range": "$55k-$75k"},
+    ],
+    "economics": [
+        {"name": "Finance", "fit_percentage": 87, "one_liner": "The single most common switch from Economics", "salary_range": "$60k-$80k"},
+        {"name": "Data Science", "fit_percentage": 80, "one_liner": "For students who liked the stats/modeling side most", "salary_range": "$75k-$105k"},
+        {"name": "Business Analytics", "fit_percentage": 76, "one_liner": "Applies econ's quant training to real business data", "salary_range": "$65k-$90k"},
+        {"name": "Political Science", "fit_percentage": 65, "one_liner": "For students drawn to the policy side of Econ", "salary_range": "$45k-$65k"},
+        {"name": "Mathematics", "fit_percentage": 63, "one_liner": "For the most theory-driven Econ students", "salary_range": "$60k-$85k"},
+        {"name": "Statistics", "fit_percentage": 62, "one_liner": "Deepens the quantitative side specifically", "salary_range": "$65k-$90k"},
+        {"name": "Public Policy", "fit_percentage": 60, "one_liner": "A direct, applied path for policy-minded students", "salary_range": "$50k-$70k"},
+        {"name": "International Relations", "fit_percentage": 55, "one_liner": "For students most interested in global economics", "salary_range": "$45k-$65k"},
+    ],
+    "computer science": [
+        {"name": "Data Science", "fit_percentage": 85, "one_liner": "The most common CS switch — huge course overlap", "salary_range": "$75k-$110k"},
+        {"name": "Information Systems", "fit_percentage": 78, "one_liner": "Less theory-heavy, more directly business-applied", "salary_range": "$65k-$95k"},
+        {"name": "Computer Engineering", "fit_percentage": 76, "one_liner": "For students who want more hardware/systems depth", "salary_range": "$75k-$105k"},
+        {"name": "Mathematics", "fit_percentage": 68, "one_liner": "For the most theory-driven CS students", "salary_range": "$60k-$85k"},
+        {"name": "Business Analytics", "fit_percentage": 66, "one_liner": "Trades some depth in CS for business context", "salary_range": "$65k-$90k"},
+        {"name": "Statistics", "fit_percentage": 64, "one_liner": "Deepens the data/modeling side of CS specifically", "salary_range": "$65k-$90k"},
+        {"name": "Cybersecurity", "fit_percentage": 62, "one_liner": "A focused, high-demand CS specialty track", "salary_range": "$70k-$100k"},
+        {"name": "Digital Media/Design", "fit_percentage": 45, "one_liner": "For CS students who realized they want the creative side", "salary_range": "$50k-$75k"},
+    ],
+    "psychology": [
+        {"name": "Sociology", "fit_percentage": 80, "one_liner": "Heaviest course overlap of any switch from Psychology", "salary_range": "$45k-$65k"},
+        {"name": "Human Resources/Management", "fit_percentage": 75, "one_liner": "Applies people-focused psych training to business", "salary_range": "$50k-$70k"},
+        {"name": "Social Work", "fit_percentage": 72, "one_liner": "A direct, helping-profession application of psychology", "salary_range": "$40k-$55k"},
+        {"name": "Communication Studies", "fit_percentage": 68, "one_liner": "For students most interested in interpersonal dynamics", "salary_range": "$45k-$65k"},
+        {"name": "Criminal Justice", "fit_percentage": 62, "one_liner": "Applies behavioral psych to the justice system", "salary_range": "$45k-$65k"},
+        {"name": "Nursing/Health Sciences", "fit_percentage": 55, "one_liner": "For students drawn to psychology's clinical side", "salary_range": "$60k-$80k"},
+        {"name": "Education", "fit_percentage": 54, "one_liner": "Applies developmental psychology directly", "salary_range": "$42k-$60k"},
+        {"name": "Business Administration", "fit_percentage": 50, "one_liner": "For students who want a more generalist business path", "salary_range": "$50k-$70k"},
+    ],
+    "nursing": [
+        {"name": "Health Sciences", "fit_percentage": 82, "one_liner": "Keeps the healthcare focus, less clinical intensity", "salary_range": "$50k-$70k"},
+        {"name": "Public Health", "fit_percentage": 75, "one_liner": "Population-level health work instead of bedside care", "salary_range": "$50k-$70k"},
+        {"name": "Health Administration/Management", "fit_percentage": 68, "one_liner": "Healthcare operations instead of direct patient care", "salary_range": "$55k-$78k"},
+        {"name": "Biology", "fit_percentage": 60, "one_liner": "A common reset into pre-health without clinical hour requirements", "salary_range": "$40k-$60k"},
+        {"name": "Kinesiology/Exercise Science", "fit_percentage": 62, "one_liner": "Health-adjacent, without nursing's clinical intensity", "salary_range": "$42k-$62k"},
+        {"name": "Psychology", "fit_percentage": 58, "one_liner": "For students drawn to the patient-interaction side", "salary_range": "$45k-$65k"},
+        {"name": "Social Work", "fit_percentage": 55, "one_liner": "Shifts from medical care to social/behavioral support", "salary_range": "$42k-$58k"},
+        {"name": "Nutrition/Dietetics", "fit_percentage": 52, "one_liner": "A specific health-adjacent specialty, less clinical", "salary_range": "$48k-$68k"},
+    ],
+    "marketing": [
+        {"name": "Communication Studies", "fit_percentage": 78, "one_liner": "Closely related, broader communication focus", "salary_range": "$45k-$65k"},
+        {"name": "Public Relations", "fit_percentage": 75, "one_liner": "Very adjacent, more media/reputation-focused", "salary_range": "$45k-$65k"},
+        {"name": "Business Analytics", "fit_percentage": 68, "one_liner": "Adds quantitative rigor to marketing instincts", "salary_range": "$65k-$90k"},
+        {"name": "Management", "fit_percentage": 65, "one_liner": "A broader business generalist path", "salary_range": "$50k-$72k"},
+        {"name": "Psychology", "fit_percentage": 58, "one_liner": "For students interested in consumer behavior specifically", "salary_range": "$45k-$65k"},
+        {"name": "Graphic Design", "fit_percentage": 55, "one_liner": "For students drawn to the creative/visual side", "salary_range": "$42k-$62k"},
+        {"name": "Journalism", "fit_percentage": 52, "one_liner": "For students who like the content/storytelling side", "salary_range": "$38k-$55k"},
+        {"name": "International Business", "fit_percentage": 50, "one_liner": "For students interested in global brand work", "salary_range": "$55k-$75k"},
+    ],
+    "biology": [
+        {"name": "Public Health", "fit_percentage": 78, "one_liner": "Keeps the science focus with a broader population lens", "salary_range": "$48k-$68k"},
+        {"name": "Environmental Science", "fit_percentage": 75, "one_liner": "A closely related natural science field", "salary_range": "$50k-$70k"},
+        {"name": "Health Sciences", "fit_percentage": 72, "one_liner": "A common landing spot for pre-health generalists", "salary_range": "$48k-$68k"},
+        {"name": "Biochemistry", "fit_percentage": 70, "one_liner": "Deepens the molecular/chemistry side of biology", "salary_range": "$50k-$72k"},
+        {"name": "Nursing", "fit_percentage": 65, "one_liner": "A common pivot toward direct clinical care", "salary_range": "$65k-$85k"},
+        {"name": "Nutrition/Dietetics", "fit_percentage": 58, "one_liner": "Applies biology to a specific health specialty", "salary_range": "$48k-$68k"},
+        {"name": "Kinesiology/Exercise Science", "fit_percentage": 56, "one_liner": "Applies biology to human movement and health", "salary_range": "$42k-$62k"},
+        {"name": "Psychology", "fit_percentage": 55, "one_liner": "For students drawn to the behavioral side of biology", "salary_range": "$45k-$65k"},
+    ],
+    "engineering": [
+        {"name": "Industrial Engineering", "fit_percentage": 72, "one_liner": "A closely related, more process/systems-focused track", "salary_range": "$65k-$85k"},
+        {"name": "Computer Science", "fit_percentage": 68, "one_liner": "For students who found they preferred the software side", "salary_range": "$75k-$110k"},
+        {"name": "Construction Management", "fit_percentage": 65, "one_liner": "Applies engineering knowledge to project/site management", "salary_range": "$58k-$80k"},
+        {"name": "Business Administration", "fit_percentage": 62, "one_liner": "For students pivoting toward management generalist paths", "salary_range": "$50k-$72k"},
+        {"name": "Physics", "fit_percentage": 60, "one_liner": "For the most theory-driven engineering students", "salary_range": "$55k-$78k"},
+        {"name": "Data Science", "fit_percentage": 58, "one_liner": "Applies engineering's quant rigor to data work", "salary_range": "$75k-$105k"},
+        {"name": "Project Management", "fit_percentage": 55, "one_liner": "A generalist pivot leveraging technical background", "salary_range": "$60k-$85k"},
+        {"name": "Mathematics", "fit_percentage": 52, "one_liner": "For the most theoretical, proof-driven students", "salary_range": "$55k-$78k"},
+    ],
+    "communication": [
+        {"name": "Marketing", "fit_percentage": 82, "one_liner": "The single most common switch — huge skill overlap", "salary_range": "$45k-$65k"},
+        {"name": "Public Relations", "fit_percentage": 80, "one_liner": "Very closely related, often the same department", "salary_range": "$45k-$65k"},
+        {"name": "Journalism", "fit_percentage": 70, "one_liner": "For students drawn to the reporting/content side", "salary_range": "$38k-$55k"},
+        {"name": "Human Resources/Management", "fit_percentage": 60, "one_liner": "Applies communication skills to organizational contexts", "salary_range": "$45k-$65k"},
+        {"name": "Business Administration", "fit_percentage": 58, "one_liner": "A generalist business pivot", "salary_range": "$50k-$70k"},
+        {"name": "Psychology", "fit_percentage": 58, "one_liner": "For students interested in interpersonal/persuasion theory", "salary_range": "$45k-$65k"},
+        {"name": "Political Science", "fit_percentage": 55, "one_liner": "For students interested in public communication/policy", "salary_range": "$42k-$62k"},
+        {"name": "Film/Media Studies", "fit_percentage": 52, "one_liner": "For students drawn to the production/media side", "salary_range": "$40k-$60k"},
+    ],
+}
 
 
 CAREERS_SCHEMA = """Respond ONLY with valid JSON, no markdown:
@@ -1029,6 +1215,14 @@ def _validate_major_search(parsed: dict) -> tuple[bool, str]:
 
 
 async def generate_majors_list(answers: dict, unl: bool) -> dict:
+    # Instant, zero-AI-call path — the most genuinely common switch
+    # destinations for this major, not a personalized guess. This is what
+    # actually removes the wait, since the AI call was the bottleneck when
+    # clicking through several of the 10 in a row.
+    databank_key = normalize_major(answers.get("major", ""))
+    if databank_key in COMMON_SWITCHES:
+        return {"majors": COMMON_SWITCHES[databank_key], "_source": "databank"}
+
     unl_block = (
         "This is a University of Nebraska-Lincoln student — favor real UNL majors where possible."
         if unl else ""
@@ -1047,10 +1241,22 @@ Student:
 
 {MAJORS_LIST_SCHEMA}"""
 
-    return await call_ai_with_retry(prompt, _validate_majors_list, max_tokens=3000)
+    result = await call_ai_with_retry(prompt, _validate_majors_list, max_tokens=3000)
+    result["_source"] = "ai"
+    return result
 
 
 async def generate_major_search(answers: dict, search_major: str, unl: bool) -> dict:
+    # Instant path — if this exact switch is already in the common-switches
+    # databank for their current major, use that real data instead of a new
+    # AI call. Falls back to a live AI evaluation for anything not covered.
+    databank_key = normalize_major(answers.get("major", ""))
+    if databank_key in COMMON_SWITCHES:
+        match = next((m for m in COMMON_SWITCHES[databank_key]
+                      if m["name"].lower() == search_major.strip().lower()), None)
+        if match:
+            return {**match, "_source": "databank"}
+
     unl_block = (
         f"This is a University of Nebraska-Lincoln student — if {search_major} is offered at "
         f"UNL, reference it specifically; if you're not certain it's offered there, say so."
@@ -1070,7 +1276,9 @@ Student:
 
 {MAJOR_SEARCH_SCHEMA}"""
 
-    return await call_ai_with_retry(prompt, _validate_major_search, max_tokens=800)
+    result = await call_ai_with_retry(prompt, _validate_major_search, max_tokens=800)
+    result["_source"] = "ai"
+    return result
 
 
 # ----------------------------------------------------------------------------
@@ -1429,6 +1637,93 @@ async def schedule(
     return result
 
 
+# ----------------------------------------------------------------------------
+# Sheldon — the in-app academic advisor chat. Deliberately scoped, not a
+# general-purpose assistant: grounded in THIS student's own already-generated
+# analysis (their majors, paths, interests), and explicitly redirects
+# off-topic questions rather than trying to answer anything at all. Reuses
+# the same proven call_ai_with_retry helper — conversation history is
+# formatted into one text block rather than a true multi-turn message list,
+# since that's simpler and doesn't require touching well-tested infrastructure.
+# ----------------------------------------------------------------------------
+ADVISOR_SCHEMA = """Respond ONLY with valid JSON, no markdown:
+{"reply": "your response to the student"}
+CRITICAL: never use a double-quote character (") inside reply — use single quotes instead."""
+
+
+def _validate_advisor(parsed: dict) -> tuple[bool, str]:
+    if not parsed.get("reply"):
+        return False, "Missing reply"
+    return True, ""
+
+
+async def generate_advisor_reply(context: dict, history: list, question: str) -> dict:
+    history_text = "\n".join(
+        f"{'Student' if h['role']=='user' else 'Sheldon'}: {h['content']}" for h in history[-10:]
+    )
+    prompt = f"""You are Sheldon, MajorMove's in-app academic advisor. You are helping ONE specific
+student understand the analysis MajorMove already generated for them — you are not a general-purpose
+assistant.
+
+What you know about this student:
+- Current major: {context.get('current_major')}
+- Alternative majors MajorMove suggested: {', '.join(context.get('path_names', []))}
+- Their stated interests: {', '.join(context.get('interests', []))}
+- Their stated career values: {', '.join(context.get('values', []))}
+- Their school: {context.get('school')}
+
+Rules:
+- Stay strictly scoped to helping with THIS student's majors, courses, careers, and this analysis.
+  If asked something unrelated (general trivia, other topics, anything outside academic/career
+  advising), politely say that's outside what you can help with here and redirect to what you can.
+- Be honest, not falsely reassuring — this is MajorMove's whole ethos. Don't invent specific facts
+  (exact scholarship dollar amounts, guaranteed course availability) you don't actually know.
+- Keep replies conversational and SHORT — a few sentences, not an essay. This is a chat, not a report.
+
+Conversation so far:
+{history_text}
+
+Student's new message: {question}
+
+{ADVISOR_SCHEMA}"""
+
+    return await call_ai_with_retry(prompt, _validate_advisor, max_tokens=500)
+
+
+@app.post("/advisor/chat")
+async def advisor_chat(
+    school: str = Form(...),
+    current_major: str = Form(...),
+    path_names: str = Form(""),
+    interests: str = Form(""),
+    values: str = Form(""),
+    history_json: str = Form("[]"),
+    question: str = Form(...),
+    anon_id: str = Form(None),
+    user: Optional[dict] = Depends(current_user),
+):
+    """Sheldon's chat endpoint — grounded in the student's own analysis,
+    not a generic assistant. history_json is the prior conversation turns
+    as [{"role": "user"|"assistant", "content": "..."}]."""
+    if not question.strip():
+        raise HTTPException(400, "question is required")
+    try:
+        history = json.loads(history_json) if history_json else []
+    except json.JSONDecodeError:
+        history = []
+
+    context = {
+        "school": school, "current_major": current_major,
+        "path_names": [p for p in path_names.split(",") if p],
+        "interests": [i for i in interests.split(",") if i],
+        "values": [v for v in values.split(",") if v],
+    }
+    log_event("advisor_chat", anon_id=anon_id,
+              user_id=user["id"] if user else None, school=school)
+
+    return await generate_advisor_reply(context, history, question.strip())
+
+
 @app.get("/me/roadmaps")
 async def my_roadmaps(user: Optional[dict] = Depends(current_user)):
     if not user:
@@ -1616,4 +1911,3 @@ async def admin_outcomes(key: str):
                      "new_major": r["new_major"], "notes": r["notes"],
                      "reported_at": r["reported_at"]} for r in rows],
     }
-# redeploy trigger
