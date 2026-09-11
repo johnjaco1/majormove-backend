@@ -1451,7 +1451,10 @@ async def event(req: EventReq, user: Optional[dict] = Depends(current_user)):
 
 @app.get("/admin/metrics")
 async def metrics(key: str):
-    """Simple founder dashboard. Protect with ADMIN_KEY env in production."""
+    """Founder dashboard — the numbers that actually matter, not just totals.
+    Retention as a RATE (not a raw count) is the single most buyer-relevant
+    number here; totals alone can't distinguish 12 returners out of 15 users
+    from 12 out of 1,000."""
     if key != os.environ.get("ADMIN_KEY", "changeme"):
         raise HTTPException(403, "Forbidden")
     with db() as conn:
@@ -1463,19 +1466,61 @@ async def metrics(key: str):
         schools = conn.execute(
             "SELECT school, COUNT(*) c FROM roadmaps GROUP BY school ORDER BY c DESC LIMIT 25"
         ).fetchall()
-        # Returning: same email showing up on 2+ distinct days — works regardless of
-        # device/browser, since email (not just user_id) is captured on every analysis.
         returning = conn.execute("""
             SELECT COUNT(*) c FROM (
                 SELECT email FROM roadmaps WHERE email IS NOT NULL
                 GROUP BY email HAVING COUNT(DISTINCT substr(created_at,1,10)) >= 2
             )
         """).fetchone()["c"]
+
+        # Real transcript engagement — pulled from each roadmap's stored
+        # diagnostics, not a guess. This is the "keep the transcripts"
+        # number: how many students actually uploaded a real transcript
+        # versus skipping it, which is a genuine depth-of-engagement signal
+        # distinct from a raw signup count.
+        all_payloads = conn.execute("SELECT payload, created_at FROM roadmaps").fetchall()
+        real_transcript_count = 0
+        for row in all_payloads:
+            try:
+                p = json.loads(row["payload"])
+                if p.get("_transcript_file_uploaded") or p.get("_transcript_text_received") \
+                   or (p.get("_transcript_pages_received") or 0) > 0:
+                    real_transcript_count += 1
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+        # Growth trend — this week vs the week before, using created_at
+        # parsed in Python rather than SQL date functions, since those
+        # differ between SQLite and Postgres and this keeps it portable.
+        now = datetime.utcnow()
+        this_week_cutoff = now - timedelta(days=7)
+        last_week_cutoff = now - timedelta(days=14)
+        roadmaps_this_week = 0
+        roadmaps_last_week = 0
+        for row in all_payloads:
+            try:
+                created = datetime.fromisoformat(row["created_at"])
+            except (ValueError, TypeError):
+                continue
+            if created >= this_week_cutoff:
+                roadmaps_this_week += 1
+            elif created >= last_week_cutoff:
+                roadmaps_last_week += 1
+
+    def pct(numerator, denominator):
+        return round((numerator / denominator) * 100, 1) if denominator else 0.0
+
     return {
         "total_users": total_users,
         "total_roadmaps": total_roadmaps,
         "total_emails_collected": total_emails,
         "returning_users": returning,
+        "retention_rate_pct": pct(returning, total_emails),
+        "real_transcript_count": real_transcript_count,
+        "transcript_upload_rate_pct": pct(real_transcript_count, total_roadmaps),
+        "distinct_schools_count": len(schools),
+        "roadmaps_this_week": roadmaps_this_week,
+        "roadmaps_last_week": roadmaps_last_week,
         "schools": [{"school": s["school"], "count": s["c"]} for s in schools],
     }
 
@@ -1571,3 +1616,4 @@ async def admin_outcomes(key: str):
                      "new_major": r["new_major"], "notes": r["notes"],
                      "reported_at": r["reported_at"]} for r in rows],
     }
+# redeploy trigger
