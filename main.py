@@ -1657,10 +1657,48 @@ def _validate_advisor(parsed: dict) -> tuple[bool, str]:
     return True, ""
 
 
+async def web_search_snippets(query: str, num: int = 4) -> list[str]:
+    """Fast, lightweight search for Sheldon — snippets only, no full page
+    fetch (that's what fetch_catalog does for /analyze, and it's too slow
+    for a live chat reply). Returns an empty list on any failure; Sheldon
+    already knows how to answer honestly with or without search results,
+    so this is additive, never required."""
+    if not SERPER_API_KEY:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=6) as client:
+            r = await client.post(
+                "https://google.serper.dev/search",
+                headers={"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"},
+                json={"q": query, "num": num},
+            )
+        organic = r.json().get("organic", [])
+        return [o["snippet"] for o in organic if o.get("snippet")][:num]
+    except Exception:
+        return []
+
+
 async def generate_advisor_reply(context: dict, history: list, question: str) -> dict:
     history_text = "\n".join(
         f"{'Student' if h['role']=='user' else 'Sheldon'}: {h['content']}" for h in history[-10:]
     )
+
+    # A fast, targeted search grounded in this student's real school and
+    # question — gives Sheldon a shot at real, current, school-specific
+    # info instead of only ever saying "I don't have that."
+    search_query = f"{context.get('school', '')} {context.get('current_major', '')} {question}".strip()
+    snippets = await web_search_snippets(search_query)
+    search_block = (
+        "\nRecent web search results that may help answer this (snippets only — verify "
+        "anything specific and consequential, like exact scholarship terms, rather than "
+        "treating these as certain; still tell the student to confirm with their advisor "
+        "or financial aid office for anything with real stakes):\n"
+        + "\n".join(f"- {s}" for s in snippets) + "\n"
+        if snippets else
+        "\n(No search results available for this question — answer from what you know, "
+        "and be upfront if you're not certain of a specific fact.)\n"
+    )
+
     prompt = f"""You are Sheldon, MajorMove's in-app academic advisor. You are helping ONE specific
 student understand the analysis MajorMove already generated for them — you are not a general-purpose
 assistant.
@@ -1671,13 +1709,18 @@ What you know about this student:
 - Their stated interests: {', '.join(context.get('interests', []))}
 - Their stated career values: {', '.join(context.get('values', []))}
 - Their school: {context.get('school')}
-
+{search_block}
 Rules:
 - Stay strictly scoped to helping with THIS student's majors, courses, careers, and this analysis.
   If asked something unrelated (general trivia, other topics, anything outside academic/career
   advising), politely say that's outside what you can help with here and redirect to what you can.
+- Use the search results above when they're genuinely relevant and helpful — you now have real,
+  current web access, so don't just say "I don't have that" if the search actually surfaced it.
 - Be honest, not falsely reassuring — this is MajorMove's whole ethos. Don't invent specific facts
-  (exact scholarship dollar amounts, guaranteed course availability) you don't actually know.
+  (exact scholarship dollar amounts, guaranteed course availability) you don't actually know, even
+  with search results in hand — snippets can be incomplete or out of date.
+- For scholarships specifically: even with search results, still recommend confirming with the
+  financial aid office before treating anything as certain — the stakes are too high to guess.
 - Keep replies conversational and SHORT — a few sentences, not an essay. This is a chat, not a report.
 
 Conversation so far:
