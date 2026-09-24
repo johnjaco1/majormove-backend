@@ -1000,6 +1000,45 @@ def normalize_major(name: str) -> str:
 
 
 # ----------------------------------------------------------------------------
+# School normalization — collapses formatting/casing variants of the same
+# school into one canonical display name, so analytics (schools reached,
+# per-school breakdowns) aren't fragmented by whether a student typed "UNL",
+# "nebraska lincoln", or the full official name. Applied both at write time
+# (new rows come in clean) and again in /admin/metrics (so legacy rows that
+# predate this fix collapse correctly too, with no migration needed).
+# ----------------------------------------------------------------------------
+SCHOOL_ALIASES = {
+    "unl": "University of Nebraska-Lincoln",
+    "u of n": "University of Nebraska-Lincoln",
+    "university of nebraska lincoln": "University of Nebraska-Lincoln",
+    "university of nebraska-lincoln": "University of Nebraska-Lincoln",
+    "nebraska lincoln": "University of Nebraska-Lincoln",
+    "nebraska-lincoln": "University of Nebraska-Lincoln",
+    "university of nebraska": "University of Nebraska-Lincoln",
+    "huskers": "University of Nebraska-Lincoln",
+    "nebraska": "University of Nebraska-Lincoln",
+    "unc": "University of North Carolina at Chapel Hill",
+    "unc chapel hill": "University of North Carolina at Chapel Hill",
+    "university of north carolina chapel hill": "University of North Carolina at Chapel Hill",
+    "university of north carolina-chapel hill": "University of North Carolina at Chapel Hill",
+    "chapel hill": "University of North Carolina at Chapel Hill",
+}
+
+
+def normalize_school(name: Optional[str]) -> Optional[str]:
+    """Canonicalize a free-text school name. Returns the input unchanged
+    (including None/empty) if there's nothing to normalize, so it's always
+    safe to call on optional fields."""
+    if not name or not name.strip():
+        return name
+    key = re.sub(r"[.,]", "", name.strip().lower())
+    key = re.sub(r"\s+", " ", key).strip()
+    if key in SCHOOL_ALIASES:
+        return SCHOOL_ALIASES[key]
+    return key.title()
+
+
+# ----------------------------------------------------------------------------
 # Common switches databank — the most genuinely common, well-known switch
 # destinations from a given major, based on real adjacent-field/coursework
 # overlap patterns, not a personalized-to-you AI guess. Static and instant:
@@ -1355,6 +1394,7 @@ Student:
 # Analytics
 # ----------------------------------------------------------------------------
 def log_event(name: str, anon_id: str = None, user_id: int = None, props: dict = None, school: str = None):
+    school = normalize_school(school)
     with db() as conn:
         conn.execute(
             "INSERT INTO events (anon_id, user_id, name, props, school, created_at) VALUES (?,?,?,?,?,?)",
@@ -1398,6 +1438,7 @@ async def health():
 async def signup(req: SignupReq):
     salt = secrets.token_hex(16)
     pw = hash_password(req.password, salt)
+    school = normalize_school(req.school)
     duplicate_email_errors = (sqlite3.IntegrityError,)
     if USE_POSTGRES:
         duplicate_email_errors = (sqlite3.IntegrityError, psycopg2.IntegrityError)
@@ -1405,14 +1446,14 @@ async def signup(req: SignupReq):
         with db() as conn:
             cur = conn.execute(
                 "INSERT INTO users (email, password_hash, salt, school, created_at) VALUES (?,?,?,?,?)",
-                (req.email.lower(), pw, salt, req.school, datetime.utcnow().isoformat()),
+                (req.email.lower(), pw, salt, school, datetime.utcnow().isoformat()),
             )
             uid = cur.lastrowid
     except duplicate_email_errors:
         raise HTTPException(400, "Email already registered")
     token = new_session(uid)
-    log_event("signup", user_id=uid, school=req.school)
-    return {"token": token, "user": {"id": uid, "email": req.email.lower(), "school": req.school}}
+    log_event("signup", user_id=uid, school=school)
+    return {"token": token, "user": {"id": uid, "email": req.email.lower(), "school": school}}
 
 
 @app.post("/auth/login")
@@ -1441,6 +1482,9 @@ async def analyze(
     transcript_file: Union[UploadFile, str, None] = File(None),
     user: Optional[dict] = Depends(current_user),
 ):
+    school = normalize_school(school) or school  # canonicalize for storage/analytics;
+    # falls back to the raw value in the (never-expected) case normalize_school
+    # returns empty, since school is a required field here
     answers = {
         "school": school, "year": year, "major": major,
         "interests": [i for i in interests.split(",") if i],
@@ -1801,9 +1845,19 @@ async def metrics(key: str):
         total_emails = conn.execute(
             "SELECT COUNT(DISTINCT email) c FROM roadmaps WHERE email IS NOT NULL"
         ).fetchone()["c"]
-        schools = conn.execute(
-            "SELECT school, COUNT(*) c FROM roadmaps GROUP BY school ORDER BY c DESC LIMIT 25"
-        ).fetchall()
+
+        # Schools are re-grouped here in Python (not a raw SQL GROUP BY) so
+        # that legacy rows saved before normalize_school() existed still
+        # collapse into the same canonical bucket as new ones — no migration
+        # needed, and it self-heals permanently even if a new alias needs
+        # adding later.
+        raw_schools = conn.execute("SELECT school FROM roadmaps").fetchall()
+        school_counts: dict = {}
+        for r in raw_schools:
+            canon = normalize_school(r["school"]) or "Unknown"
+            school_counts[canon] = school_counts.get(canon, 0) + 1
+        schools = sorted(school_counts.items(), key=lambda kv: -kv[1])[:25]
+
         returning = conn.execute("""
             SELECT COUNT(*) c FROM (
                 SELECT email FROM roadmaps WHERE email IS NOT NULL
@@ -1811,21 +1865,42 @@ async def metrics(key: str):
             )
         """).fetchone()["c"]
 
-        # Real transcript engagement — pulled from each roadmap's stored
-        # diagnostics, not a guess. This is the "keep the transcripts"
-        # number: how many students actually uploaded a real transcript
-        # versus skipping it, which is a genuine depth-of-engagement signal
-        # distinct from a raw signup count.
+        # Real transcript engagement, current-major mix, and switch-pattern
+        # intelligence are all pulled from each roadmap's stored payload in
+        # one pass. The switch pattern (current major -> the alternative
+        # path with the highest success_likelihood) is the single most
+        # sellable data asset here: it's proprietary signal on which major
+        # switches are actually recommended most often, across real
+        # students — not something a buyer, investor, or advising office
+        # can get anywhere else.
         all_payloads = conn.execute("SELECT payload, created_at FROM roadmaps").fetchall()
         real_transcript_count = 0
+        current_major_counts: dict = {}
+        switch_counts: dict = {}
         for row in all_payloads:
             try:
                 p = json.loads(row["payload"])
-                if p.get("_transcript_file_uploaded") or p.get("_transcript_text_received") \
-                   or (p.get("_transcript_pages_received") or 0) > 0:
-                    real_transcript_count += 1
             except (json.JSONDecodeError, TypeError):
                 continue
+            if p.get("_transcript_file_uploaded") or p.get("_transcript_text_received") \
+               or (p.get("_transcript_pages_received") or 0) > 0:
+                real_transcript_count += 1
+
+            current_major = (p.get("current") or {}).get("major")
+            if current_major:
+                current_major_counts[current_major] = current_major_counts.get(current_major, 0) + 1
+
+            alternatives = [
+                path for path in (p.get("paths") or [])
+                if not path.get("is_current") and path.get("major")
+            ]
+            if current_major and alternatives:
+                top_alt = max(alternatives, key=lambda path: path.get("success_likelihood") or 0)
+                pair = (current_major, top_alt["major"])
+                switch_counts[pair] = switch_counts.get(pair, 0) + 1
+
+        top_current_majors = sorted(current_major_counts.items(), key=lambda kv: -kv[1])[:10]
+        top_switches = sorted(switch_counts.items(), key=lambda kv: -kv[1])[:10]
 
         # Growth trend — this week vs the week before, using created_at
         # parsed in Python rather than SQL date functions, since those
@@ -1845,6 +1920,21 @@ async def metrics(key: str):
             elif created >= last_week_cutoff:
                 roadmaps_last_week += 1
 
+        # Top-of-funnel conversion, from the events table. This only became
+        # trustworthy once the frontend's redundant track() calls for
+        # analysis_started/completed were removed — before that, every real
+        # analysis was double-logged (once by the frontend, once by this
+        # endpoint), which would have shown a fake ~2x inflated funnel.
+        event_rows = conn.execute(
+            "SELECT name, COUNT(*) c FROM events "
+            "WHERE name IN ('landing_view','analysis_started','analysis_completed') "
+            "GROUP BY name"
+        ).fetchall()
+        event_counts = {r["name"]: r["c"] for r in event_rows}
+        landing_views = event_counts.get("landing_view", 0)
+        analyses_started = event_counts.get("analysis_started", 0)
+        analyses_completed = event_counts.get("analysis_completed", 0)
+
     def pct(numerator, denominator):
         return round((numerator / denominator) * 100, 1) if denominator else 0.0
 
@@ -1856,10 +1946,21 @@ async def metrics(key: str):
         "retention_rate_pct": pct(returning, total_emails),
         "real_transcript_count": real_transcript_count,
         "transcript_upload_rate_pct": pct(real_transcript_count, total_roadmaps),
-        "distinct_schools_count": len(schools),
+        "distinct_schools_count": len(school_counts),
         "roadmaps_this_week": roadmaps_this_week,
         "roadmaps_last_week": roadmaps_last_week,
-        "schools": [{"school": s["school"], "count": s["c"]} for s in schools],
+        "schools": [{"school": s, "count": c} for s, c in schools],
+        "top_current_majors": [{"major": m, "count": c} for m, c in top_current_majors],
+        "top_switches": [
+            {"from_major": frm, "to_major": to, "count": c} for (frm, to), c in top_switches
+        ],
+        "funnel": {
+            "landing_views": landing_views,
+            "analyses_started": analyses_started,
+            "analyses_completed": analyses_completed,
+            "start_rate_pct": pct(analyses_started, landing_views),
+            "completion_rate_pct": pct(analyses_completed, analyses_started),
+        },
     }
 
 
@@ -1873,7 +1974,7 @@ async def emails(key: str):
             "SELECT email, school, major, created_at FROM roadmaps "
             "WHERE email IS NOT NULL ORDER BY created_at DESC"
         ).fetchall()
-    return [{"email": r["email"], "school": r["school"], "major": r["major"],
+    return [{"email": r["email"], "school": normalize_school(r["school"]), "major": r["major"],
              "created_at": r["created_at"]} for r in rows]
 
 
