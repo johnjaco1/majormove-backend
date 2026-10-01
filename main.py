@@ -1170,13 +1170,13 @@ def _validate_careers(parsed: dict) -> tuple[bool, str]:
 
 
 async def generate_careers(answers: dict, unl: bool) -> dict:
-    # Instant, zero-AI-call path for common majors — a real speed win, with
-    # an honest tradeoff: this list isn't personalized to THIS student's
-    # specific interests/values the way the AI-generated version is, since
-    # it's the same curated list for every student in that major. Still 18
-    # real, well-reasoned careers either way.
+    # Instant, zero-AI-call path for common majors — but ONLY when the student
+    # gave us nothing to personalize with. The moment they've picked any
+    # interests or career values, a static list can't reflect that, so we
+    # always call the AI in that case, even though it's slower/costlier.
     databank_key = normalize_major(answers.get("major", ""))
-    if databank_key in CAREER_DATABANK:
+    has_preferences = bool(answers.get("interests")) or bool(answers.get("values"))
+    if databank_key in CAREER_DATABANK and not has_preferences:
         return {"careers": CAREER_DATABANK[databank_key], "_source": "databank"}
 
     unl_block = (
