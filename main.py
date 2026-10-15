@@ -1480,6 +1480,13 @@ def unl_program_prompt_block() -> str:
         "map to College of Agricultural Sciences & Natural Resources programs in the list.\n"
         "- If asked about a program that is not on the list, say plainly that UNL's catalog does not "
         "list it and name the closest real UNL programs from the list. Do not hedge or guess.\n"
+        "- Do not name specific UNL student clubs, organizations, student media outlets, or networks. "
+        "Say 'a student finance organization' or 'a campus media outlet' instead. The only ones you may "
+        "name are: Big Red Investment Club, Husker Venture Fund, Wall Street Scholars of Nebraska. You "
+        "may name these official offices: Explore Center, Business Career Center, College of Business "
+        "Advising, CAST.\n"
+        "- You may recommend visiting a UNL office, but never write that an office 'reports', 'says', "
+        "'found', or 'shows' anything: do not attribute statistics or claims to a named office.\n"
     )
 
 
@@ -1494,6 +1501,17 @@ _UNL_HEDGE_RE = re.compile(
     rf"|\bwhether\s+{_SCHOOL}\s+(?:offers?|has)\b"
     rf"|\b(?:if|assuming)\s+{_SCHOOL}\s+offers\b", re.I)
 _NEGATION_BEFORE = re.compile(r"n't\b|\b(?:no|not|never|without|nor)\b")
+
+
+# Real UNL student organizations we can safely name (from business.unl.edu/organizations).
+_UNL_KNOWN_ORGS = {"big red investment club", "husker venture fund", "wall street scholars of nebraska"}
+_UNL_TOKENS = ("nebraska", "husker", "big red", "cornhusker", "raikes", "unl", "lincoln")
+_ORG_NAME_RE = re.compile(
+    r"\b(?:[A-Z][A-Za-z&'\u2019\-]*\s+){1,5}(?:Club|Society|Association|Network|Fund|Fraternity|Sorority|Council)\b")
+_OFFICE_CLAIM_RE = re.compile(
+    r"\b(?:Business Career Center|Career Center|Career Services|Explore Center|Advising(?: Center)?|"
+    r"Career Coaches|CAST|Financial Aid(?: Office)?|Registrar|Admissions(?: Office)?)\s+"
+    r"(?:also\s+|often\s+)?(?:reports?|states?|says?|found|finds|shows?|notes?|estimates?)\b")
 
 
 def unl_text_problems(obj) -> list:
@@ -1512,6 +1530,20 @@ def unl_text_problems(obj) -> list:
     if _UNL_HEDGE_RE.search(blob):
         problems.append("it hedges about whether a program is offered at UNL; every program on the "
                         "list is offered, and anything not on the list is not")
+    # Invented UNL-specific entities: a club/network named as if it were real, and
+    # statistics or claims attributed to a named office.
+    for m in _ORG_NAME_RE.finditer(blob):
+        phrase = m.group(0)
+        low_phrase = phrase.lower()
+        if any(t in low_phrase for t in _UNL_TOKENS) and not any(k in low_phrase for k in _UNL_KNOWN_ORGS):
+            problems.append(f"it names a specific UNL organization ({phrase.strip()}) that is not on the "
+                            "verified list; describe it generically instead (for example, a student "
+                            "finance organization)")
+            break
+    om = _OFFICE_CLAIM_RE.search(blob)
+    if om:
+        problems.append(f"it attributes a claim to a UNL office ({om.group(0).strip()}); recommend "
+                        "visiting the office instead of saying what it reports")
     return problems
 
 
@@ -1937,9 +1969,11 @@ Student:
 
 {CAREERS_SCHEMA}"""
 
-    result = await call_ai_with_retry(prompt, _validate_careers, max_tokens=6000)
     if unl:
+        result = await call_ai_unl_checked(prompt, _validate_careers, 6000, unl_text_problems)
         result = await verify_unl_course_codes(result)
+    else:
+        result = await call_ai_with_retry(prompt, _validate_careers, max_tokens=6000)
     result["_source"] = "ai"
     return result
 
