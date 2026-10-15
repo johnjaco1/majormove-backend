@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 load_dotenv()  # reads .env in the current folder into the environment — required for local dev
 import json
 import re
+import difflib
 import base64
 import time
 import hashlib
@@ -793,7 +794,7 @@ Student:
 {catalog_block}{transcript_block}
 {transcript_accuracy_rules}
 {unl_block}
-
+{unl_program_prompt_block() if unl else ""}
 {ANALYSIS_SCHEMA}"""
 
     if fallback_to_images:
@@ -807,6 +808,12 @@ Student:
     else:
         content = prompt  # always text-only now in the normal (non-fallback) case
 
+    if unl:
+        # Every alternative path must be a real UNL major: checked after the
+        # call, one corrective retry if not, and anything still unverifiable is
+        # dropped or flagged rather than shown as fact.
+        result = await call_ai_unl_checked(content, _validate_analysis, 16000, unl_paths_problems)
+        return sanitize_unl_paths(result)
     return await call_ai_with_retry(content, _validate_analysis, max_tokens=16000)
 
 
@@ -1039,6 +1046,553 @@ def normalize_school(name: Optional[str]) -> Optional[str]:
 
 
 # ----------------------------------------------------------------------------
+# UNL program ground truth — the REAL list of UNL undergraduate majors and
+# minors, from catalog.unl.edu/undergraduate/majors/ and each college's own
+# catalog page (pulled and cross-checked Oct 14, 2026).
+#
+# Why this exists: an advisor testing MajorMove found it recommending programs
+# UNL does not offer (Social Work, Management Information Systems), hedging on
+# one it does offer (Forensic Science), and inventing a minor that does not
+# exist. Root cause: nothing tied the AI or the hardcoded lists to what UNL
+# actually offers. Everything that names a UNL program is now checked against
+# this list: it is given to the AI as a closed set, and the AI's answer is
+# verified against it afterward (one corrective retry, then anything still
+# unverifiable is dropped or flagged rather than shown as fact).
+#
+# Row format: name | college | kind
+#   M+ = major with a minor also offered, M = major, N = minor only,
+#   P  = pre-professional / non-degree path, C = certificate (not recommended)
+# Colleges: AG = Agricultural Sciences & Natural Resources, A&S = Arts &
+#   Sciences, BUS = Business, ENG = Engineering, EHS = Education & Human
+#   Sciences, FPA = Fine & Performing Arts, JMC = Journalism & Mass Comm,
+#   ARCH = Architecture, PACS = Public Affairs & Community Service,
+#   EXP = Explore Center, OTH = other units.
+# To update: re-pull the catalog and edit the rows. Nothing else needs to change.
+# ----------------------------------------------------------------------------
+_UNL_PROGRAM_ROWS = """
+Accounting|BUS|M+
+Acting|FPA|M
+Actuarial Science (Business)|BUS|M+
+Actuarial Science (CAS)|A&S|M+
+Advertising & Public Relations|JMC|M+
+Aerospace Studies Minor|OTH|N
+African Studies Minor|A&S|N
+African-American Studies Minor|A&S|N
+Agribusiness (Business)|BUS|M
+Agribusiness (CASNR)|AG|M+
+Agricultural Economics|AG|M+
+Agricultural Engineering|ENG|M
+Agricultural Leadership, Education and Communication|AG|M+
+Agricultural Systems Technology|AG|M+
+Agronomy|AG|M+
+Animal Science|AG|M+
+Anthropology|A&S|M+
+Applied Climate Science Minor|AG|N
+Arabic Studies Minor|A&S|N
+Archaeology Minor|A&S|N
+Architectural Engineering (Omaha)|ENG|M
+Architectural Studies|ARCH|M+
+Art|FPA|M+
+Art History and Criticism|FPA|M+
+Artificial Intelligence Minor|ENG|N
+Asian Studies Minor|A&S|N
+Astronomy Minor|A&S|N
+Biochemistry (CAS)|A&S|M+
+Biochemistry (CASNR)|AG|M+
+Biological Sciences|A&S|M+
+Biological Systems Engineering|ENG|M
+Biomedical Engineering Minor|ENG|N
+Broadcasting|JMC|M+
+Business & Law|BUS|M+
+Business Administration|BUS|M+
+Business Analytics|BUS|M+
+Business Minor for Raikes|BUS|N
+CYAF: Early Childhood Education in a Mobile Society|EHS|M
+CYAF: Family & Consumer Sciences Occupational (Grades 6-12)|EHS|M
+CYAF: Human Development and Family Science|EHS|M
+CYAF: Inclusive Early Childhood Education (Birth-Grade 3)|EHS|M
+Chemical Engineering|ENG|M
+Chemistry|A&S|M+
+Child, Youth & Family Studies Minor|EHS|N
+Civil Engineering|ENG|M
+Classics & Religious Studies|A&S|M+
+Clifton Builders Management Minor|BUS|N
+Coaching Minor|EHS|N
+Communication Sciences & Disorders|EHS|M
+Communication Studies|A&S|M+
+Community & Regional Planning Minor|ARCH|N
+Computational Biology & Bioinformatics Minor|A&S|N
+Computer Engineering|ENG|M
+Computer Science|ENG|M+
+Construction Engineering|ENG|M
+Construction Management|ENG|M+
+Criminology & Criminal Justice|PACS|M+
+Cybersecurity Minor|ENG|N
+Czech Studies Minor|A&S|N
+Dance|FPA|M+
+Data Science (CAS)|A&S|M
+Data Science (ENGR)|ENG|M
+Digital Agriculture Minor|AG|N
+Digital Humanities Minor|A&S|N
+Ecological Engineering Minor|AG|N
+Economics (Business)|BUS|M+
+Economics (CAS)|A&S|M+
+Education Studies Minor|EHS|N
+Educational Psychology Minor|EHS|N
+Electrical Engineering|ENG|M
+Elementary Education & Special Education (K-6)|EHS|M
+Elementary Education (K-6)|EHS|M
+Elementary Education (K-6) & Early Childhood Education (Age 3-Grade 3)|EHS|M
+Emerging Media Arts|FPA|M
+Energy Science Minor|AG|N
+Engineering Leadership Minor|ENG|N
+Engineering Mechanics Minor|ENG|N
+Engler Agribusiness Entrepreneurship Minor|AG|N
+English|A&S|M+
+Entertainment Design and Production|FPA|M
+Entrepreneurship Minor|BUS|N
+Environmental & Sustainability Studies (CAS)|A&S|M+
+Environmental & Sustainability Studies (CASNR)|AG|M+
+Environmental Education Minor|AG|N
+Environmental Engineering|ENG|M+
+Environmental Science|AG|M+
+Ethnic Studies Minor|A&S|N
+Film Studies|A&S|M+
+Finance|BUS|M+
+Fisheries & Wildlife|AG|M+
+Food Science & Technology|AG|M+
+Food Technology for Companion Animals Minor|AG|N
+Food, Energy and Water in Society Minor|AG|N
+Forensic Science|AG|M
+French Minor|A&S|N
+Geography|A&S|M+
+German Minor|A&S|N
+Gerontology Minor|PACS|N
+Global Leadership Minor|BUS|N
+Global Studies|A&S|M+
+Graphic Arts|FPA|M
+Graphic Design|FPA|M
+Grassland Systems|AG|M+
+Greek Minor|A&S|N
+History|A&S|M+
+Hospitality, Restaurant & Tourism Management|EHS|M+
+Human Rights & Humanitarian Affairs Minor|A&S|N
+Humanities in Medicine Minor|A&S|N
+Indigenous Studies Minor|A&S|N
+Individualized Program of Studies|A&S|M+
+Insect Science Minor|AG|N
+Integrated Science|AG|M
+Interdisciplinary Studies|FPA|M
+Interior Design|ARCH|M+
+International Agriculture & Natural Resources Minor|AG|N
+International Business|BUS|M
+International Engineering Minor|ENG|N
+International Studies Minor (CEHS)|EHS|N
+International Trade Minor|AG|N
+Japanese Studies Minor|A&S|N
+Jewish Studies Minor|A&S|N
+Journalism|JMC|M
+Landscape Architecture|ARCH|M+
+Latin Minor|A&S|N
+Latinx and Latin American Studies Minor|A&S|N
+Lesbian, Gay, Bisexual, Transgender, Queer/Sexuality Studies Minor|A&S|N
+Management|BUS|M+
+Marketing|BUS|M+
+Mathematics|A&S|M+
+Mechanical Engineering|ENG|M
+Medieval & Renaissance Studies Minor|A&S|N
+Microbiology (CAS)|A&S|M
+Microbiology (CASNR)|AG|M
+Military Leadership Minor|BUS|N
+Modern Languages|A&S|M
+Multidisciplinary Studies|A&S|M
+Music|FPA|M+
+Music Education|FPA|M
+Music Technology Minor|FPA|N
+National Security Studies Minor|A&S|N
+Natural Resource & Environmental Economics Minor|AG|N
+Nutrition & Health Sciences: Community Health and Wellness Option|EHS|M
+Nutrition & Health Sciences: Nutrition & Biomedical Sciences Option|EHS|M
+Nutrition & Health Sciences: Nutrition, Exercise & Health Science Option|EHS|M
+PGA Golf Management|AG|M
+Philosophy|A&S|M+
+Physics|A&S|M+
+Plant & Landscape Systems|AG|M+
+Plant Biology|AG|M+
+Plant Pathology Minor|AG|N
+Plant Protection Minor|AG|N
+Political Science|A&S|M+
+Positive Psychology and Wellbeing Minor|EHS|N
+Pre-Health (Non-Degree)|EXP|P
+Pre-Law (Non-Degree)|EXP|P
+Pre-Veterinary Medicine|AG|P
+Precision Agriculture Minor|AG|N
+Psychology|A&S|M+
+Racial Justice, Equity, & Inclusion Minor|A&S|N
+Regional and Community Forestry|AG|M
+Remote Sensing in Agriculture and Natural Resources Minor|AG|N
+Robotics Engineering|ENG|M+
+Secondary Education: Arabic|EHS|M
+Secondary Education: Biology|EHS|M
+Secondary Education: Business, Marketing & Information Technology|EHS|M
+Secondary Education: Chemistry|EHS|M
+Secondary Education: Chinese|EHS|M
+Secondary Education: English Language Arts|EHS|M
+Secondary Education: French|EHS|M
+Secondary Education: German|EHS|M
+Secondary Education: Japanese|EHS|M
+Secondary Education: Latin|EHS|M
+Secondary Education: Mathematics|EHS|M
+Secondary Education: Physics|EHS|M
+Secondary Education: Science|EHS|M
+Secondary Education: Secondary English|EHS|M
+Secondary Education: Social Studies|EHS|M
+Secondary Education: Spanish|EHS|M
+Sociology|A&S|M+
+Software Development Minor|ENG|N
+Software Engineering|ENG|M
+Soil Science Minor|AG|N
+Spanish (CAS)|A&S|M+
+Special Education (7-12)|EHS|M
+Special Education (K-6)|EHS|M
+Sports Management & Business Minor|BUS|N
+Sports Media & Communication|JMC|M
+Supply Chain Management|BUS|M+
+Theatre|FPA|M+
+Undeclared (Non-Degree)|EXP|P
+Urban Forestry Minor|AG|N
+Veterinary Science|AG|M+
+Victimology and Victim Services Minor|PACS|N
+Water Science Minor|AG|N
+Women's & Gender Studies|A&S|M+
+Zoo Animal Science Minor|AG|N
+Public Policy & Analysis Certificate|A&S|C
+Social Entrepreneurship Certificate|A&S|C
+Irrigation and Agricultural Water Management Certificate|AG|C
+Wildlife Habitat Management Certificate|AG|C
+Agricultural and Environmental Sciences Communication Minor|AG|N
+Community Economics and Social Dynamics Minor|AG|N
+Companion Animal and Equine Science Minor|AG|N
+Fermentation Science Minor|AG|N
+Grazing Livestock Systems Minor|AG|N
+Horticulture Minor|AG|N
+Landscape Design and Management Minor|AG|N
+Leadership and Communication Minor|AG|N
+Leadership and Entrepreneurship Minor|AG|N
+Meat Science Minor|AG|N
+Nebraska Beef Industry Scholars Minor|AG|N
+Ranch Management Minor|AG|N
+Sustainability Studies Minor|AG|N
+Turfgrass and Landscape Management Minor|AG|N
+Musical Theatre Minor|FPA|N
+"""
+
+_UNL_COLLEGE_NAMES = {
+    "AG": "College of Agricultural Sciences & Natural Resources",
+    "A&S": "College of Arts & Sciences",
+    "BUS": "College of Business",
+    "ENG": "College of Engineering",
+    "EHS": "College of Education & Human Sciences",
+    "FPA": "Hixson-Lied College of Fine & Performing Arts",
+    "JMC": "College of Journalism & Mass Communications",
+    "ARCH": "College of Architecture",
+    "PACS": "College of Public Affairs & Community Service",
+    "EXP": "Explore Center",
+    "OTH": "another UNL academic unit",
+}
+
+# Programs verified, on the college's own catalog page, to have NO minor.
+# Deliberately short: only list a program here once it has been checked.
+UNL_VERIFIED_NO_MINOR = {"Forensic Science"}
+
+_UNL_COLLEGE_TAGS = re.compile(r"\s*\((?:Business|CAS|CASNR|ENGR|CEHS)\)")
+
+
+def _prog_key(s: Optional[str]) -> str:
+    """Loose comparison key: lowercase, '&' -> 'and', parentheticals and
+    punctuation dropped, whitespace collapsed."""
+    s = (s or "").lower().replace("&", " and ")
+    s = re.sub(r"\([^)]*\)", " ", s)
+    s = re.sub(r"[^a-z0-9 ]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _load_unl_programs():
+    major_by_key, minor_by_key = {}, {}
+    majors, minors_only, minor_available, college_of = [], [], set(), {}
+    for line in _UNL_PROGRAM_ROWS.strip().splitlines():
+        name, college, kind = [p.strip() for p in line.split("|")]
+        display = _UNL_COLLEGE_TAGS.sub("", name).strip()
+        if kind in ("M", "M+", "P"):
+            if display not in majors:
+                majors.append(display)
+            major_by_key.setdefault(_prog_key(display), display)
+            college_of.setdefault(display, college)
+            if kind == "M+":
+                minor_available.add(display)
+                minor_by_key.setdefault(_prog_key(display), display)
+        elif kind == "N":
+            mname = re.sub(r"\s+Minor$", "", display).strip()
+            if mname not in minors_only:
+                minors_only.append(mname)
+            minor_by_key.setdefault(_prog_key(mname), mname)
+    return major_by_key, minor_by_key, majors, minors_only, minor_available, college_of
+
+
+(UNL_MAJOR_BY_KEY, UNL_MINOR_BY_KEY, UNL_MAJORS, UNL_MINORS_ONLY,
+ UNL_MINOR_AVAILABLE, UNL_COLLEGE_OF) = _load_unl_programs()
+
+# What we offer as recommendations/autocomplete: real majors and pre-professional
+# tracks, excluding the "Undeclared" placeholder.
+UNL_MAJORS_FOR_PROMPT = sorted(m for m in UNL_MAJORS if _prog_key(m) != "undeclared")
+
+# Common shorthand students (and the AI) use for programs UNL does offer. Only
+# confident equivalents belong here; anything unsure stays unmatched and is
+# dropped rather than guessed.
+_UNL_MAJOR_ALIASES = {
+    "biology": "Biological Sciences", "bio": "Biological Sciences",
+    "biological science": "Biological Sciences",
+    "criminal justice": "Criminology & Criminal Justice",
+    "criminology": "Criminology & Criminal Justice",
+    "public relations": "Advertising & Public Relations",
+    "advertising": "Advertising & Public Relations",
+    "film media studies": "Film Studies", "film": "Film Studies",
+    "human resources": "Management", "human resources management": "Management",
+    "environmental studies": "Environmental & Sustainability Studies",
+    "business": "Business Administration",
+    "cs": "Computer Science", "comp sci": "Computer Science", "computer sci": "Computer Science",
+    "econ": "Economics", "psych": "Psychology", "poli sci": "Political Science",
+    "communication": "Communication Studies", "communications": "Communication Studies",
+    "ag econ": "Agricultural Economics", "agricultural business": "Agribusiness",
+    "pre vet": "Pre-Veterinary Medicine", "pre veterinary": "Pre-Veterinary Medicine",
+    "pre med": "Pre-Health (Non-Degree)", "premed": "Pre-Health (Non-Degree)",
+    "pre medicine": "Pre-Health (Non-Degree)",
+}
+
+
+def resolve_unl_major(name: Optional[str]) -> Optional[str]:
+    """Canonical UNL major name for free text, or None if UNL's catalog does
+    not list it. Never guesses: close spelling variants and a short list of
+    known aliases match, everything else is None."""
+    k = _prog_key(name)
+    k = re.sub(r"^(bs|ba|bfa|bachelor of (science|arts|fine arts)) in ", "", k)
+    k = re.sub(r" (major|degree|program)$", "", k).strip()
+    if not k:
+        return None
+    if k in UNL_MAJOR_BY_KEY:
+        return UNL_MAJOR_BY_KEY[k]
+    if k in _UNL_MAJOR_ALIASES:
+        return _UNL_MAJOR_ALIASES[k]
+    close = difflib.get_close_matches(k, list(UNL_MAJOR_BY_KEY), n=1, cutoff=0.9)
+    return UNL_MAJOR_BY_KEY[close[0]] if close else None
+
+
+def resolve_unl_minor(name: Optional[str]) -> Optional[str]:
+    k = re.sub(r" minor$", "", _prog_key(name)).strip()
+    return UNL_MINOR_BY_KEY.get(k) if k else None
+
+
+# Real UNL programs closest in spirit to majors UNL does not offer. Used for
+# the honest "UNL doesn't offer X; closest options here" message.
+_UNL_RELATED_HINTS = {
+    "social work": ["Sociology", "Psychology", "CYAF: Human Development and Family Science",
+                    "Criminology & Criminal Justice"],
+    "nursing": ["Pre-Health (Non-Degree)", "Biological Sciences",
+                "Nutrition & Health Sciences: Nutrition & Biomedical Sciences Option"],
+    "public health": ["Nutrition & Health Sciences: Community Health and Wellness Option",
+                      "Pre-Health (Non-Degree)", "Biological Sciences", "Sociology"],
+    "management information systems": ["Business Analytics", "Computer Science", "Management",
+                                       "Data Science"],
+    "information systems": ["Business Analytics", "Computer Science", "Data Science"],
+    "information technology": ["Computer Science", "Software Engineering", "Business Analytics"],
+    "statistics": ["Mathematics", "Data Science", "Actuarial Science"],
+    "industrial engineering": ["Mechanical Engineering", "Supply Chain Management",
+                               "Construction Engineering"],
+    "exercise science": ["Nutrition & Health Sciences: Nutrition, Exercise & Health Science Option"],
+    "kinesiology": ["Nutrition & Health Sciences: Nutrition, Exercise & Health Science Option"],
+    "pre med": ["Pre-Health (Non-Degree)", "Biological Sciences", "Biochemistry"],
+    "neuroscience": ["Psychology", "Biological Sciences"],
+    "education": ["Elementary Education (K-6)", "Special Education (K-6)"],
+}
+
+
+def closest_unl_majors(name: Optional[str], n: int = 3) -> list:
+    """Nearest real UNL majors to something that didn't match, for an honest
+    'closest matches' hint. Word overlap first, spelling similarity second."""
+    k = _prog_key(name)
+    if k in _UNL_RELATED_HINTS:
+        return [h for h in _UNL_RELATED_HINTS[k] if h in UNL_MAJORS][:n]
+    out = []
+    words = set(k.split()) - {"and", "of", "the", "in"}
+    scored = []
+    for key, display in UNL_MAJOR_BY_KEY.items():
+        if key == "undeclared":
+            continue
+        overlap = len(words & set(key.split()))
+        ratio = difflib.SequenceMatcher(None, k, key).ratio()
+        if overlap or ratio >= 0.55:
+            scored.append((overlap + ratio, display))
+    scored.sort(key=lambda t: t[0], reverse=True)
+    for _, display in scored:
+        if display not in out:
+            out.append(display)
+        if len(out) == n:
+            break
+    return out
+
+
+def unl_college_name(major: str) -> Optional[str]:
+    return _UNL_COLLEGE_NAMES.get(UNL_COLLEGE_OF.get(major, ""))
+
+
+def _unl_tag(entry: dict, canon: str) -> dict:
+    """Canonical name plus facts that come straight from the catalog list
+    (never from the AI): which college offers it, and whether a minor exists."""
+    return {**entry, "name": canon, "college": unl_college_name(canon),
+            "minor_available": canon in UNL_MINOR_AVAILABLE}
+
+
+def unl_program_prompt_block() -> str:
+    """The closed list of real UNL programs plus the rules for using it,
+    appended to any prompt that might name a UNL major or minor."""
+    majors = "; ".join(m + ("*" if m in UNL_MINOR_AVAILABLE else "") for m in UNL_MAJORS_FOR_PROMPT)
+    minors = "; ".join(UNL_MINORS_ONLY)
+    return (
+        "\nUNL PROGRAM LIST — ground truth from catalog.unl.edu. This is a CLOSED set: UNL offers no "
+        "undergraduate major or minor that is not named here.\n"
+        f"UNL majors ('*' = a minor in the same subject is also offered): {majors}\n"
+        f"UNL standalone minors: {minors}\n"
+        "STRICT RULES whenever you name a UNL program anywhere in your answer:\n"
+        "- A major you name must appear in the list above, spelled exactly as listed (drop the '*'). "
+        "UNL's catalog does not list Social Work, Nursing, Public Health, Management Information "
+        "Systems, Information Systems, Industrial Engineering, or Statistics as majors, so never "
+        "suggest them.\n"
+        "- Every program on the list IS offered at UNL. Never say or imply that a listed program "
+        "'might not be offered' or that you are 'not sure' UNL has it.\n"
+        "- Only claim a minor exists if it is a standalone minor above or the major has a '*'. Never "
+        "invent a minor. Forensic Science is a major only; UNL has no Forensic Science minor.\n"
+        "- Agriculture, animal science, pre-veterinary, wildlife, food, and natural-resource interests "
+        "map to College of Agricultural Sciences & Natural Resources programs in the list.\n"
+        "- If asked about a program that is not on the list, say plainly that UNL's catalog does not "
+        "list it and name the closest real UNL programs from the list. Do not hedge or guess.\n"
+    )
+
+
+_SCHOOL = r"(?:unl|nebraska|the\s+university|lincoln)"
+_UNL_HEDGE_RE = re.compile(
+    rf"\b{_SCHOOL}\s+(?:might|may|could)\s+(?:or\s+may\s+)?not\s+(?:currently\s+)?(?:offer|have)\b"
+    r"|\b(?:might|may|could)\s+not\s+(?:currently\s+)?(?:be\s+)?(?:offered|available)\s+"
+    rf"(?:(?:at\s+{_SCHOOL}\s+)?as\s+an?\s+(?:major|minor|program|degree)"
+    rf"|at\s+{_SCHOOL}(?=\s*[.,;:)\"]|\s*$))"
+    r"|\b(?:not\s+sure|not\s+certain|unsure|uncertain|unclear|not\s+clear)\s+(?:if|whether)\s+"
+    rf"(?:{_SCHOOL}|this\s+(?:program|major)|it)\s+(?:offers?|has|is\s+offered|exists?|is\s+available)\b"
+    rf"|\bwhether\s+{_SCHOOL}\s+(?:offers?|has)\b"
+    rf"|\b(?:if|assuming)\s+{_SCHOOL}\s+offers\b", re.I)
+_NEGATION_BEFORE = re.compile(r"n't\b|\b(?:no|not|never|without|nor)\b")
+
+
+def unl_text_problems(obj) -> list:
+    """Free-text claims we can check deterministically: a minor in a program
+    verified to have none (unless the text is correctly denying it), and
+    hedging about whether a UNL program exists."""
+    blob = json.dumps(obj, ensure_ascii=False)
+    low = blob.lower()
+    problems = []
+    for name in UNL_VERIFIED_NO_MINOR:
+        n = re.escape(name.lower())
+        for m in re.finditer(rf"\b{n}\s+minor\b|\bminor(?:ing)?\s+in\s+{n}\b", low):
+            if not _NEGATION_BEFORE.search(low[max(0, m.start() - 45):m.start()]):
+                problems.append(f"UNL has no minor in {name} (it is a major only)")
+                break
+    if _UNL_HEDGE_RE.search(blob):
+        problems.append("it hedges about whether a program is offered at UNL; every program on the "
+                        "list is offered, and anything not on the list is not")
+    return problems
+
+
+def unl_majors_list_problems(result: dict) -> list:
+    problems = [f"'{m.get('name')}' is not a UNL major"
+                for m in result.get("majors", []) if not resolve_unl_major(m.get("name"))]
+    return problems + unl_text_problems(result)
+
+
+def unl_paths_problems(result: dict) -> list:
+    problems = [f"'{p.get('major')}' is not a UNL major"
+                for p in result.get("paths", [])
+                if not p.get("is_current") and not resolve_unl_major(p.get("major"))]
+    return problems + unl_text_problems(result)
+
+
+def sanitize_unl_majors_list(result: dict) -> dict:
+    """Final safety net after the AI call: keep only real UNL majors, under
+    their canonical names, with no duplicates."""
+    kept, seen = [], set()
+    for m in result.get("majors", []):
+        canon = resolve_unl_major(m.get("name"))
+        if not canon or canon in seen or _prog_key(canon) == "undeclared":
+            continue
+        seen.add(canon)
+        kept.append(_unl_tag(m, canon))
+    result["majors"] = kept
+    return result
+
+
+def sanitize_unl_paths(result: dict) -> dict:
+    """Canonicalize alternative-path names. A path that still isn't a real UNL
+    major is dropped if at least 3 paths remain, otherwise kept but flagged so
+    the UI can say it couldn't be confirmed (never shown as established fact)."""
+    paths = result.get("paths", [])
+    bad = [p for p in paths if not p.get("is_current") and not resolve_unl_major(p.get("major"))]
+    if bad and len(paths) - len(bad) >= 3:
+        result["paths"] = [p for p in paths if not any(p is b for b in bad)]
+    else:
+        for p in bad:
+            p["unverified_program"] = True
+    for p in result.get("paths", []):
+        if not p.get("is_current"):
+            canon = resolve_unl_major(p.get("major"))
+            if canon:
+                p["major"] = canon
+    return result
+
+
+def filter_switches_for_unl(entries: list) -> list:
+    """The hardcoded common-switch lists are generic US majors. For UNL
+    students keep only entries that are real UNL majors, under UNL's names."""
+    out, seen = [], set()
+    for e in entries:
+        canon = resolve_unl_major(e.get("name"))
+        if not canon or canon in seen or _prog_key(canon) == "undeclared":
+            continue
+        seen.add(canon)
+        out.append(_unl_tag(e, canon))
+    return out
+
+
+async def call_ai_unl_checked(content, validate_fn, max_tokens: int, problems_fn) -> dict:
+    """call_ai_with_retry, plus one corrective round if the answer names
+    programs UNL doesn't offer or makes a checkable false claim. The
+    correction costs one extra call only when a violation actually occurs."""
+    result = await call_ai_with_retry(content, validate_fn, max_tokens=max_tokens)
+    problems = problems_fn(result)
+    if not problems:
+        return result
+    note = ("\n\nCORRECTION REQUIRED. Your previous answer had these problems: "
+            + "; ".join(problems[:6])
+            + ". Regenerate the full answer in the same format, using ONLY programs from the UNL "
+              "PROGRAM LIST and making no unsupported claims about minors or availability.")
+    if isinstance(content, list):
+        new_content = content + [{"type": "text", "text": note}]
+    else:
+        new_content = content + note
+    try:
+        retry = await call_ai_with_retry(new_content, validate_fn, max_tokens=max_tokens)
+    except HTTPException:
+        return result  # keep the first answer; the caller's sanitizer handles what remains
+    return retry if len(problems_fn(retry)) <= len(problems) else result
+
+
+# ----------------------------------------------------------------------------
 # Common switches databank — the most genuinely common, well-known switch
 # destinations from a given major, based on real adjacent-field/coursework
 # overlap patterns, not a personalized-to-you AI guess. Static and instant:
@@ -1184,6 +1738,8 @@ async def generate_careers(answers: dict, unl: bool) -> dict:
         "UNL resources like the Business Career Center or Explore Center as a next step."
         if unl else ""
     )
+    if unl:
+        unl_block += "\n" + unl_program_prompt_block()
     prompt = f"""You are MajorMove's career exploration feature. Based on this student's
 profile, generate a broad, honest, specific set of career options they may not have
 fully considered — this is meant to be explored and scrolled through, not just their
@@ -1254,16 +1810,28 @@ def _validate_major_search(parsed: dict) -> tuple[bool, str]:
 
 
 async def generate_majors_list(answers: dict, unl: bool) -> dict:
-    # Instant, zero-AI-call path — the most genuinely common switch
-    # destinations for this major, not a personalized guess. This is what
-    # actually removes the wait, since the AI call was the bottleneck when
-    # clicking through several of the 10 in a row.
     databank_key = normalize_major(answers.get("major", ""))
-    if databank_key in COMMON_SWITCHES:
-        return {"majors": COMMON_SWITCHES[databank_key], "_source": "databank"}
+    has_preferences = bool(answers.get("interests")) or bool(answers.get("values"))
+    current_unl = resolve_unl_major(answers.get("major", "")) if unl else None
+
+    # Instant, zero-AI-call path — the most genuinely common switch
+    # destinations for this major. Used ONLY when the student gave us nothing
+    # to personalize with: the moment they pick interests or values, a static
+    # list can't reflect that, so (same rule as careers) we call the AI.
+    # For UNL students the list is first filtered to majors UNL really offers;
+    # if too few survive, fall through to the AI path below.
+    if databank_key in COMMON_SWITCHES and not has_preferences:
+        entries = COMMON_SWITCHES[databank_key]
+        if not unl:
+            return {"majors": entries, "_source": "databank", "_programs_verified": False}
+        kept = [e for e in filter_switches_for_unl(entries) if e["name"] != current_unl]
+        if len(kept) >= 6:
+            return {"majors": kept, "_source": "databank", "_programs_verified": True}
 
     unl_block = (
-        "This is a University of Nebraska-Lincoln student — favor real UNL majors where possible."
+        "This is a University of Nebraska-Lincoln student. Recommend ONLY majors from the UNL "
+        "program list below, spelled exactly as listed; never include a program that is not on it.\n"
+        + unl_program_prompt_block()
         if unl else ""
     )
     prompt = f"""You are MajorMove's major exploration feature. Based on this student's profile,
@@ -1278,29 +1846,78 @@ Student:
 - Career values: {', '.join(answers.get('values', []))}
 {unl_block}
 
+fit_percentage means how well the major matches this student's stated interests and career
+values. It is NOT a success prediction.
+
 {MAJORS_LIST_SCHEMA}"""
 
-    result = await call_ai_with_retry(prompt, _validate_majors_list, max_tokens=3000)
+    if unl:
+        result = await call_ai_unl_checked(prompt, _validate_majors_list, 3000, unl_majors_list_problems)
+        result = sanitize_unl_majors_list(result)
+        # The sanitizer may have removed non-UNL entries; top up from the
+        # (already UNL-filtered) common switches rather than show a short list.
+        if len(result["majors"]) < 7 and databank_key in COMMON_SWITCHES:
+            have = {m["name"] for m in result["majors"]}
+            for e in filter_switches_for_unl(COMMON_SWITCHES[databank_key]):
+                if e["name"] not in have and e["name"] != current_unl:
+                    result["majors"].append(e)
+                    have.add(e["name"])
+        result["_programs_verified"] = True
+    else:
+        result = await call_ai_with_retry(prompt, _validate_majors_list, max_tokens=3000)
+        result["_programs_verified"] = False
     result["_source"] = "ai"
     return result
 
 
 async def generate_major_search(answers: dict, search_major: str, unl: bool) -> dict:
-    # Instant path — if this exact switch is already in the common-switches
-    # databank for their current major, use that real data instead of a new
-    # AI call. Falls back to a live AI evaluation for anything not covered.
-    databank_key = normalize_major(answers.get("major", ""))
-    if databank_key in COMMON_SWITCHES:
-        match = next((m for m in COMMON_SWITCHES[databank_key]
-                      if m["name"].lower() == search_major.strip().lower()), None)
-        if match:
-            return {**match, "_source": "databank"}
+    has_preferences = bool(answers.get("interests")) or bool(answers.get("values"))
+    canon = None
 
-    unl_block = (
-        f"This is a University of Nebraska-Lincoln student — if {search_major} is offered at "
-        f"UNL, reference it specifically; if you're not certain it's offered there, say so."
-        if unl else ""
-    )
+    if unl:
+        # Ground truth first. If UNL's catalog doesn't list this as a major, say
+        # so plainly (no AI call, no guessing) and point to the closest real
+        # UNL programs instead of evaluating something that doesn't exist.
+        canon = resolve_unl_major(search_major)
+        if canon is None:
+            closest = closest_unl_majors(search_major)
+            return {
+                "name": search_major,
+                "not_offered": True,
+                "fit_percentage": None,
+                "one_liner": f"UNL's undergraduate catalog doesn't list {search_major} as a major.",
+                "salary_range": None,
+                "closest": [_unl_tag({"fit_percentage": None}, c) for c in closest],
+                "_source": "unl_list",
+                "_programs_verified": True,
+            }
+        search_major = canon
+
+    # Instant path — if this exact switch is in the common-switches databank
+    # for their current major AND they gave us no preferences to personalize
+    # with, reuse that data instead of a new AI call.
+    databank_key = normalize_major(answers.get("major", ""))
+    if databank_key in COMMON_SWITCHES and not has_preferences:
+        def same(m):
+            if unl:
+                return resolve_unl_major(m["name"]) == canon
+            return m["name"].lower() == search_major.strip().lower()
+        match = next((m for m in COMMON_SWITCHES[databank_key] if same(m)), None)
+        if match:
+            out = {**match, "_source": "databank", "_programs_verified": unl}
+            return _unl_tag(out, canon) if unl else out
+
+    if unl:
+        unl_block = (
+            f"This is a University of Nebraska-Lincoln student. {search_major} IS a UNL major "
+            f"(confirmed against the UNL catalog) — never say or imply it might not be offered. "
+            f"Evaluate only how well it fits this student.\n" + unl_program_prompt_block()
+        )
+    else:
+        unl_block = (
+            f"You cannot verify {answers.get('school')}'s program list, so do not claim "
+            f"{search_major} is or isn't offered there — evaluate only how well it fits this student."
+        )
     prompt = f"""You are MajorMove's major search feature. A student has a SPECIFIC major in
 mind — evaluate honestly whether it fits them, don't just confirm whatever they typed.
 
@@ -1313,10 +1930,18 @@ Student:
 - Major they're asking about: {search_major}
 {unl_block}
 
+fit_percentage means how well this major matches the student's stated interests and career
+values. It is NOT a success prediction.
+
 {MAJOR_SEARCH_SCHEMA}"""
 
-    result = await call_ai_with_retry(prompt, _validate_major_search, max_tokens=800)
+    if unl:
+        result = await call_ai_unl_checked(prompt, _validate_major_search, 800, unl_text_problems)
+        result = _unl_tag(result, canon)
+    else:
+        result = await call_ai_with_retry(prompt, _validate_major_search, max_tokens=800)
     result["_source"] = "ai"
+    result["_programs_verified"] = unl
     return result
 
 
@@ -1541,6 +2166,11 @@ async def analyze(
     result["_transcript_pages_received"] = len(t_images)
     result["_transcript_text_received"] = bool(t_text)
     result["_transcript_file_uploaded"] = is_real_upload
+    # True when alternative-major names were checked against UNL's official
+    # program list. For other schools we cannot verify program names, so the
+    # UI tells the student to confirm them in their own catalog.
+    result["_programs_verified"] = is_unl(school)
+    result["_current_major_in_catalog"] = bool(resolve_unl_major(major)) if is_unl(school) else None
 
     # Real cost math, computed here in Python — never left to the AI to guess.
     # Tuition varies wildly by school (in-state/out-of-state, public/private,
@@ -1743,6 +2373,8 @@ async def generate_advisor_reply(context: dict, history: list, question: str) ->
         "and be upfront if you're not certain of a specific fact.)\n"
     )
 
+    unl = is_unl(context.get("school", ""))
+    program_block = unl_program_prompt_block() if unl else ""
     prompt = f"""You are Sheldon, MajorMove's in-app academic advisor. You are helping ONE specific
 student understand the analysis MajorMove already generated for them — you are not a general-purpose
 assistant.
@@ -1753,7 +2385,7 @@ What you know about this student:
 - Their stated interests: {', '.join(context.get('interests', []))}
 - Their stated career values: {', '.join(context.get('values', []))}
 - Their school: {context.get('school')}
-{search_block}
+{search_block}{program_block}
 Rules:
 - Stay strictly scoped to helping with THIS student's majors, courses, careers, and this analysis.
   If asked something unrelated (general trivia, other topics, anything outside academic/career
@@ -1774,6 +2406,8 @@ Student's new message: {question}
 
 {ADVISOR_SCHEMA}"""
 
+    if unl:
+        return await call_ai_unl_checked(prompt, _validate_advisor, 500, unl_text_problems)
     return await call_ai_with_retry(prompt, _validate_advisor, max_tokens=500)
 
 
