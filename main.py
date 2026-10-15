@@ -18,6 +18,7 @@ load_dotenv()  # reads .env in the current folder into the environment — requi
 import json
 import re
 import difflib
+import asyncio
 import base64
 import time
 import hashlib
@@ -813,7 +814,11 @@ Student:
         # call, one corrective retry if not, and anything still unverifiable is
         # dropped or flagged rather than shown as fact.
         result = await call_ai_unl_checked(content, _validate_analysis, 16000, unl_paths_problems)
-        return sanitize_unl_paths(result)
+        result = sanitize_unl_paths(result)
+        # Course codes must exist in UNL's catalog; codes from the student's own
+        # transcript or the verified catalog text are trusted as-is.
+        return await verify_unl_course_codes(
+            result, allow_text=f"{transcript_text or ''} {catalog.get('content') or ''}")
     return await call_ai_with_retry(content, _validate_analysis, max_tokens=16000)
 
 
@@ -1593,6 +1598,183 @@ async def call_ai_unl_checked(content, validate_fn, max_tokens: int, problems_fn
 
 
 # ----------------------------------------------------------------------------
+# Course-code verification (UNL). The AI knows many real UNL course codes but
+# invents others: it told a student to take JOUR 101, which does not exist (the
+# real course is JOMC 101, Principles of Mass Media). Any UNL course code in an
+# AI answer is checked against that subject's own page on catalog.unl.edu.
+# A code that isn't listed is rewritten using the real codes for that subject,
+# and anything still unverifiable is removed rather than shown as fact.
+# Fails OPEN: if the catalog can't be reached, or a page doesn't look like a
+# real course list, the text is left alone, so this can never replace correct
+# information with a guess.
+# ----------------------------------------------------------------------------
+_COURSE_CODE_RE = re.compile(r"\b([A-Z]{2,5})\s?(\d{3}[A-Z]?)\b")
+_UNL_COURSE_PAGE_URL = "https://catalog.unl.edu/undergraduate/courses/{prefix}/"
+_COURSE_PAGE_CACHE: dict = {}          # prefix -> (cached_until, frozenset | None)
+_COURSE_PAGE_TTL = 12 * 3600
+_UNL_PREFIX_SIBLINGS = {"JOUR": ["JOMC"], "JOMC": ["JOUR"]}  # JOMC replaced JOUR for some courses
+
+
+def _parse_course_codes(prefix: str, page_text: str) -> Optional[frozenset]:
+    """Codes for one subject prefix found in a catalog page's text, or None if
+    the page doesn't look like a real course list (so we fail open)."""
+    found = {m.group(1).upper()
+             for m in re.finditer(rf"\b{re.escape(prefix)}\s{{0,3}}(\d{{3}}[A-Za-z]?)\b", page_text or "")}
+    return frozenset(found) if len(found) >= 5 else None
+
+
+def _code_listed(number: str, listed: frozenset) -> bool:
+    """Honors/suffix variants count as listed when the base course is."""
+    base = re.sub(r"[A-Z]$", "", number)
+    return number in listed or base in listed or any(re.sub(r"[A-Z]$", "", c) == base for c in listed)
+
+
+async def _unl_course_codes_for_prefix(prefix: str, client) -> Optional[frozenset]:
+    now = time.time()
+    hit = _COURSE_PAGE_CACHE.get(prefix)
+    if hit and now < hit[0]:
+        return hit[1]
+    codes = None
+    try:
+        r = await client.get(_UNL_COURSE_PAGE_URL.format(prefix=prefix.lower()), follow_redirects=True)
+        if r.status_code == 200:
+            codes = _parse_course_codes(prefix, BeautifulSoup(r.text, "html.parser").get_text(" "))
+    except Exception:
+        codes = None
+    # Keep good lookups for hours, retry failures after a few minutes.
+    _COURSE_PAGE_CACHE[prefix] = (now + (_COURSE_PAGE_TTL if codes else 300), codes)
+    return codes
+
+
+def _text_leaves(obj) -> list:
+    """(container, key, text) for every string in a JSON-like object, skipping
+    private keys (those starting with an underscore)."""
+    out = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(k, str) and k.startswith("_"):
+                continue
+            if isinstance(v, str):
+                out.append((obj, k, v))
+            else:
+                out.extend(_text_leaves(v))
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            if isinstance(v, str):
+                out.append((obj, i, v))
+            else:
+                out.extend(_text_leaves(v))
+    return out
+
+
+def _scrub_codes(text: str, bad: set) -> str:
+    """Last resort: delete unverifiable codes and tidy the leftovers."""
+    out = _COURSE_CODE_RE.sub(
+        lambda m: "" if (m.group(1), m.group(2).upper()) in bad else m.group(0), text)
+    out = re.sub(r"\b(?:or|and)\s*(?=[,.;:)]|$)", "", out)
+    out = re.sub(r"\s+([,.;:])", r"\1", out)
+    out = re.sub(r",\s*,", ",", out)
+    return re.sub(r"\s{2,}", " ", out).strip(" ,;")
+
+
+def _drop_empty_list_items(obj):
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _drop_empty_list_items(v)
+    elif isinstance(obj, list):
+        obj[:] = [v for v in obj if not (isinstance(v, str) and not v.strip())]
+        for v in obj:
+            _drop_empty_list_items(v)
+
+
+def _bad_codes(leaves: list, pages: dict, allowed: set) -> set:
+    bad = set()
+    for _, _, text in leaves:
+        for m in _COURSE_CODE_RE.finditer(text):
+            key = (m.group(1), m.group(2).upper())
+            listed = pages.get(key[0])
+            if key not in allowed and listed is not None and not _code_listed(key[1], listed):
+                bad.add(key)
+    return bad
+
+
+async def _verify_unl_course_codes(result: dict, allow_text: str) -> dict:
+    leaves = _text_leaves(result)
+    allowed = {(m.group(1), m.group(2).upper()) for m in _COURSE_CODE_RE.finditer(allow_text or "")}
+    prefixes = {m.group(1) for _, _, t in leaves for m in _COURSE_CODE_RE.finditer(t)
+                if (m.group(1), m.group(2).upper()) not in allowed}
+    if not prefixes:
+        return result
+
+    async with httpx.AsyncClient(timeout=4, headers={"User-Agent": "MajorMove course-code check"}) as client:
+        wanted = sorted(prefixes | {s for p in prefixes for s in _UNL_PREFIX_SIBLINGS.get(p, [])})
+        fetched = await asyncio.gather(*[_unl_course_codes_for_prefix(p, client) for p in wanted])
+    pages = dict(zip(wanted, fetched))
+
+    bad = _bad_codes(leaves, pages, allowed)
+    if not bad:
+        result["_course_codes_checked"] = any(pages.get(p) is not None for p in prefixes)
+        return result
+
+    affected = [(c, k, t) for c, k, t in leaves
+                if any((m.group(1), m.group(2).upper()) in bad for m in _COURSE_CODE_RE.finditer(t))]
+    bad_prefixes = {p for p, _ in bad}
+    hint_prefixes = sorted(bad_prefixes | {s for p in bad_prefixes for s in _UNL_PREFIX_SIBLINGS.get(p, [])})
+    hints = "\n".join(
+        f"{p}: {', '.join(sorted(pages[p])[:150])}" for p in hint_prefixes if pages.get(p))
+    items = {str(i): t for i, (_, _, t) in enumerate(affected)}
+
+    def _valid(parsed: dict) -> tuple[bool, str]:
+        fixes = parsed.get("fixes")
+        if not isinstance(fixes, dict) or any(not isinstance(fixes.get(k), str) or not fixes[k].strip() for k in items):
+            return False, "fixes must contain a non-empty string for every id"
+        return True, ""
+
+    prompt = f"""These texts were written for University of Nebraska-Lincoln students. Some course codes in
+them do NOT exist in the UNL catalog: {', '.join(f'{p} {n}' for p, n in sorted(bad))}.
+
+Rewrite each text so that every course code in it is real. Use ONLY codes from the REAL CODES lists below.
+If none of them fits what the sentence needs, delete the fake code and refer to the course generically
+(for example: an intro journalism course) without inventing a code. Keep each text's meaning, tone, and
+length. Do not add new facts. Never use a double-quote character inside any string value.
+
+REAL CODES BY SUBJECT (from catalog.unl.edu):
+{hints}
+
+TEXTS:
+{json.dumps(items, ensure_ascii=False)}
+
+Respond ONLY with valid JSON: {{"fixes": {{"0": "rewritten text"}}}} with one entry for every id above."""
+    try:
+        fixes = (await call_ai_with_retry(prompt, _valid, max_tokens=1500)).get("fixes", {})
+    except HTTPException:
+        fixes = {}
+    for i, (container, key, _) in enumerate(affected):
+        if isinstance(fixes.get(str(i)), str) and fixes[str(i)].strip():
+            container[key] = fixes[str(i)].strip()
+
+    # Anything the rewrite didn't clean up is removed, never left as a fake fact.
+    leaves = _text_leaves(result)
+    still_bad = _bad_codes(leaves, pages, allowed)
+    if still_bad:
+        for container, key, text in leaves:
+            container[key] = _scrub_codes(text, still_bad)
+        _drop_empty_list_items(result)
+    result["_course_codes_checked"] = True
+    result["_course_codes_fixed"] = len(bad)
+    return result
+
+
+async def verify_unl_course_codes(result: dict, allow_text: str = "") -> dict:
+    """Entry point. allow_text is source material the codes may legitimately come
+    from (the student's transcript, verified catalog text). Never raises."""
+    try:
+        return await asyncio.wait_for(_verify_unl_course_codes(result, allow_text), timeout=20)
+    except Exception:
+        return result
+
+
+# ----------------------------------------------------------------------------
 # Common switches databank — the most genuinely common, well-known switch
 # destinations from a given major, based on real adjacent-field/coursework
 # overlap patterns, not a personalized-to-you AI guess. Static and instant:
@@ -1756,6 +1938,8 @@ Student:
 {CAREERS_SCHEMA}"""
 
     result = await call_ai_with_retry(prompt, _validate_careers, max_tokens=6000)
+    if unl:
+        result = await verify_unl_course_codes(result)
     result["_source"] = "ai"
     return result
 
@@ -1777,8 +1961,8 @@ MAJORS_LIST_SCHEMA = """Respond ONLY with valid JSON, no markdown:
     }
   ]
 }
-Generate exactly 10 majors, ranked by fit_percentage descending. Include their current major
-if it genuinely belongs in a top-10 fit list — don't force it in artificially if it doesn't.
+Generate exactly 10 majors, ranked by fit_percentage descending. Do NOT include their current
+major: it is already shown in their path comparison.
 Vary fit_percentage honestly (not all 80+). No duplicates. No generic filler names.
 one_liner is a FRAGMENT, not a full sentence — short and scannable.
 CRITICAL: never use a double-quote character (") inside any string value — use single quotes
@@ -1854,6 +2038,7 @@ values. It is NOT a success prediction.
     if unl:
         result = await call_ai_unl_checked(prompt, _validate_majors_list, 3000, unl_majors_list_problems)
         result = sanitize_unl_majors_list(result)
+        result["majors"] = [m for m in result["majors"] if m["name"] != current_unl]
         # The sanitizer may have removed non-UNL entries; top up from the
         # (already UNL-filtered) common switches rather than show a short list.
         if len(result["majors"]) < 7 and databank_key in COMMON_SWITCHES:
@@ -1865,6 +2050,8 @@ values. It is NOT a success prediction.
         result["_programs_verified"] = True
     else:
         result = await call_ai_with_retry(prompt, _validate_majors_list, max_tokens=3000)
+        cur = _prog_key(answers.get("major"))
+        result["majors"] = [m for m in result.get("majors", []) if _prog_key(m.get("name")) != cur]
         result["_programs_verified"] = False
     result["_source"] = "ai"
     return result
@@ -1958,7 +2145,7 @@ SCHEDULE_SCHEMA = """Respond ONLY with valid JSON, no markdown:
   "terms": [
     {
       "term_label": "Semester 1",
-      "courses": ["FINA 363", "ECON 212", "MGMT 200", "General Elective"]
+      "courses": ["FINA 363", "ECON 212", "ACCT 201", "General Elective"]
     }
   ]
 }
@@ -2013,7 +2200,10 @@ Student:
 
 {SCHEDULE_SCHEMA}"""
 
-    return await call_ai_with_retry(prompt, _validate_schedule, max_tokens=1500)
+    result = await call_ai_with_retry(prompt, _validate_schedule, max_tokens=1500)
+    if unl:
+        result = await verify_unl_course_codes(result, allow_text=catalog.get("content") or "")
+    return result
 
 
 # Analytics
@@ -2407,7 +2597,9 @@ Student's new message: {question}
 {ADVISOR_SCHEMA}"""
 
     if unl:
-        return await call_ai_unl_checked(prompt, _validate_advisor, 500, unl_text_problems)
+        reply = await call_ai_unl_checked(prompt, _validate_advisor, 500, unl_text_problems)
+        # Course codes the student typed themselves are not Sheldon's claims.
+        return await verify_unl_course_codes(reply, allow_text=f"{history_text} {question}")
     return await call_ai_with_retry(prompt, _validate_advisor, max_tokens=500)
 
 
